@@ -1,0 +1,58 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Accounts",
+      "description": "Registered employee and admin accounts in MELAYU system",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["employeeId", "fullName", "username", "role", "status"]
+    },
+    "activityGallery": {
+      "title": "Activity Gallery",
+      "description": "Documentation photos, videos, and narrations of DJPb Riau activities",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "date": { "type": "string" },
+        "division": { "type": "string" },
+        "mediaType": { "type": "string", "enum": ["photo", "video"] },
+        "mediaUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "narration": { "type": "string" },
+        "category": { "type": "string" },
+        "location": { "type": "string" },
+        "authorName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "date", "division", "mediaType", "mediaUrl", "narration", "category"]
+    },
+    "appSettings": {
+      "title": "Application Settings",
+      "description": "System branding and global config",
+      "type": "object",
+      "properties": {
+        "logoUrl": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "users" },
+      "description": "User accounts collection"
+    },
+    "/activity_gallery/{activityId}": {
+      "schema": { "$ref": "activityGallery" },
+      "description": "Published activities, photos, videos and narrations"
+    }
+  }
+}

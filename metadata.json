@@ -1,0 +1,6 @@
+{
+  "name": "MELAYU Dashboard",
+  "description": "Dashboard Integrasi Layanan Umum Kanwil DJPb Provinsi Riau (MELAYU) untuk peminjaman ruangan, peminjaman barang, kendaraan, monitoring kinerja, dan agenda.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
