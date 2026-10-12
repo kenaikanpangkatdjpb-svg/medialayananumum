@@ -43,6 +43,20 @@
         "logoUrl": { "type": "string" },
         "updatedAt": { "type": "string" }
       }
+    },
+    "employeeAdvocacy": {
+      "title": "Employee Advocacy Records",
+      "description": "Monitoring of employee advocacy submission status per edition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["Sudah", "Belum"] },
+        "edition": { "type": "string" },
+        "division": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "status", "edition"]
     }
   },
   "firestore": {
@@ -53,6 +67,10 @@
     "/activity_gallery/{activityId}": {
       "schema": { "$ref": "activityGallery" },
       "description": "Published activities, photos, videos and narrations"
+    },
+    "/employee_advocacy/{eaId}": {
+      "schema": { "$ref": "employeeAdvocacy" },
+      "description": "Employee Advocacy monitoring records per edition"
     }
   }
 }

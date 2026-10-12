@@ -170,10 +170,14 @@ export const STANDARD_EA_EDITIONS = [
   'EA 07',
   'EA 08',
   'EA 09',
-  'EA 10'
+  'EA 10',
+  'EA 11'
 ];
 
 export const INITIAL_EA_EDITIONS = [
+  'EA 11',
+  'EA 10',
+  'EA 09',
   'EA 08',
   'EA 07',
   'EA 06',
@@ -181,12 +185,10 @@ export const INITIAL_EA_EDITIONS = [
   'EA 04',
   'EA 03',
   'EA 02',
-  'EA 01',
-  'EA 09',
-  'EA 10'
+  'EA 01'
 ];
 
-export const INITIAL_EMPLOYEE_ADVOCACY: EmployeeAdvocacyItem[] = [
+export const EA_08_EMPLOYEES: EmployeeAdvocacyItem[] = [
   { id: 'ea-1', name: 'Abil Fikri Audia S.M.', status: 'Belum', edition: 'EA 08' },
   { id: 'ea-2', name: 'Achmad Djunaidi', status: 'Sudah', edition: 'EA 08' },
   { id: 'ea-3', name: 'Ade Wahyu Susanto S.S.T. Ak. M.E.', status: 'Belum', edition: 'EA 08' },
@@ -276,4 +278,18 @@ export const INITIAL_EMPLOYEE_ADVOCACY: EmployeeAdvocacyItem[] = [
   { id: 'ea-87', name: 'Yoel Parlaungan Simamora A.Md.Ak.', status: 'Sudah', edition: 'EA 08' },
   { id: 'ea-88', name: 'Yohana Miranda Manik S.Kom.', status: 'Sudah', edition: 'EA 08' },
   { id: 'ea-89', name: 'Yolanda Catherina Sirait A.Md.Ak.', status: 'Belum', edition: 'EA 08' }
+];
+
+export const EA_11_EMPLOYEES: EmployeeAdvocacyItem[] = EA_08_EMPLOYEES.map((item, idx) => ({
+  id: `ea11-${idx + 1}`,
+  name: item.name,
+  status: item.status,
+  edition: 'EA 11',
+  division: item.division,
+  updatedAt: new Date().toISOString()
+}));
+
+export const INITIAL_EMPLOYEE_ADVOCACY: EmployeeAdvocacyItem[] = [
+  ...EA_08_EMPLOYEES,
+  ...EA_11_EMPLOYEES
 ];

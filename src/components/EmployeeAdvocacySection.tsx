@@ -45,16 +45,26 @@ export default function EmployeeAdvocacySection({
 }: EmployeeAdvocacySectionProps) {
   const isAdmin = isEditMode || currentUser?.role === 'admin' || (currentUser?.role as string) === 'Administrator';
 
-  // Active Edition State
+  // Active Edition State (Default: EA 11)
   const [editions, setEditions] = useState<string[]>(() => {
-    return safeLocalStorageGet<string[]>('melayu_ea_editions', INITIAL_EA_EDITIONS);
+    const stored = safeLocalStorageGet<string[]>('melayu_ea_editions', INITIAL_EA_EDITIONS);
+    if (!stored.includes('EA 11')) {
+      return ['EA 11', ...stored];
+    }
+    return stored;
   });
-  const [selectedEdition, setSelectedEdition] = useState<string>('EA 08');
+  const [selectedEdition, setSelectedEdition] = useState<string>('EA 11');
 
-  // Main Records State (automatically purged of filter metadata rows)
+  // Main Records State (automatically purged of filter metadata rows & ensures EA 11 seeded)
   const [records, setRecords] = useState<EmployeeAdvocacyItem[]>(() => {
     const stored = safeLocalStorageGet<EmployeeAdvocacyItem[]>('melayu_ea_records', INITIAL_EMPLOYEE_ADVOCACY);
-    return sanitizeEmployeeRecords(stored).clean;
+    const cleaned = sanitizeEmployeeRecords(stored).clean;
+    const hasEA11 = cleaned.some(r => (r.edition || '').toUpperCase() === 'EA 11');
+    if (!hasEA11) {
+      const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
+      return [...cleaned, ...ea11Seed];
+    }
+    return cleaned;
   });
 
   // Selected IDs for Bulk Actions (Admin Only)
@@ -81,7 +91,7 @@ export default function EmployeeAdvocacySection({
   const [previewZoom, setPreviewZoom] = useState<number>(100);
   const pdfIframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  // Sync with Firestore on mount with automated data sanitation
+  // Sync with Firestore on mount with automated data sanitation and EA 11 sync
   useEffect(() => {
     const unsub = subscribeFirestoreCollection<EmployeeAdvocacyItem>(
       'employee_advocacy',
@@ -89,13 +99,24 @@ export default function EmployeeAdvocacySection({
       (firestoreData) => {
         if (firestoreData && firestoreData.length > 0) {
           const { clean, removed } = sanitizeEmployeeRecords(firestoreData);
-          setRecords(clean);
+          const hasEA11 = clean.some(r => (r.edition || '').toUpperCase() === 'EA 11');
+          if (!hasEA11) {
+            const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
+            const merged = [...clean, ...ea11Seed];
+            setRecords(merged);
+            ea11Seed.forEach(item => saveFirestoreDoc('employee_advocacy', item));
+          } else {
+            setRecords(clean);
+          }
           
           // Auto-discover any distinct editions present in records so they appear at top
           const docEditions = Array.from(new Set(clean.map(r => r.edition).filter(Boolean))) as string[];
+          if (!docEditions.includes('EA 11')) {
+            docEditions.unshift('EA 11');
+          }
           if (docEditions.length > 0) {
             setEditions(prev => {
-              const combined = Array.from(new Set([...docEditions, ...prev]));
+              const combined = Array.from(new Set(['EA 11', ...docEditions, ...prev]));
               return combined;
             });
           }
@@ -1727,7 +1748,7 @@ export default function EmployeeAdvocacySection({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  Pilih Target Edisi EA (EA 01 s.d. EA 10) *
+                  Pilih Target Edisi EA (EA 01 s.d. EA 11) *
                 </label>
                 <select
                   id="select-upload-target-edition"
@@ -1735,7 +1756,7 @@ export default function EmployeeAdvocacySection({
                   onChange={(e) => setUploadTargetEdition(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:outline-none bg-white text-xs font-semibold text-slate-800"
                 >
-                  <optgroup label="Pilihan Edisi Standar (EA 01 - EA 10)">
+                  <optgroup label="Pilihan Edisi Standar (EA 01 - EA 11)">
                     {STANDARD_EA_EDITIONS.map((ed) => (
                       <option key={ed} value={ed}>{ed}</option>
                     ))}
@@ -1902,7 +1923,7 @@ export default function EmployeeAdvocacySection({
                     onChange={(e) => setUploadTargetEdition(e.target.value)}
                     className="px-2.5 py-1 text-xs font-bold bg-white border border-amber-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   >
-                    <optgroup label="Edisi Standar (EA 01 - EA 10)">
+                    <optgroup label="Edisi Standar (EA 01 - EA 11)">
                       {STANDARD_EA_EDITIONS.map((ed) => (
                         <option key={ed} value={ed}>{ed}</option>
                       ))}

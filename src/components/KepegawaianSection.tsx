@@ -9,7 +9,13 @@ import {
 import * as XLSX from 'xlsx';
 import { GKMAgreement, ScholarshipInfo, CurrentUser } from '../types';
 import TLegoView from './TLegoView';
-import CekSeribuMatrixTable, { INITIAL_CEK_SERIBU_MATRIX, MatrixRowData } from './CekSeribuMatrixTable';
+import CekSeribuMatrixTable, { 
+  INITIAL_CEK_SERIBU_MATRIX, 
+  MatrixRowData, 
+  detectMonthYearFromMatrix, 
+  detectMonthYearFromStrings, 
+  MONTH_NAMES_MAP 
+} from './CekSeribuMatrixTable';
 import { saveFirestoreDoc, deleteFirestoreDoc, saveFirestoreCollection, subscribeFirestoreCollection } from '../lib/firebase';
 import { safeLocalStorageSet } from '../lib/storage';
 
@@ -141,7 +147,15 @@ export default function KepegawaianSection({
     if (local) {
       try {
         const parsed = JSON.parse(local);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasOldJulyOnly =
+            parsed.some((r: any) => r.records && Object.keys(r.records).some((k: string) => k.includes('Jul'))) &&
+            !parsed.some((r: any) => r.records && Object.keys(r.records).some((k: string) => k.includes('Okt') || k.includes('10')));
+          if (hasOldJulyOnly) {
+            return INITIAL_CEK_SERIBU_MATRIX;
+          }
+          return parsed;
+        }
       } catch (e) {}
     }
     return INITIAL_CEK_SERIBU_MATRIX;
@@ -182,11 +196,21 @@ export default function KepegawaianSection({
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
 
   const [uploadForm, setUploadForm] = useState({
-    uploadDate: '22-07-2026',
+    uploadDate: '07-10-2026',
     createdBy: 'Admin Kepegawaian'
   });
-  const [uploadMonth, setUploadMonth] = useState<string>('08');
-  const [uploadYear, setUploadYear] = useState<string>('2026');
+  const [uploadMonth, setUploadMonth] = useState<string>(() => {
+    const saved = localStorage.getItem('melayu_cek_seribu_month');
+    if (saved && saved !== '07') return saved;
+    const det = detectMonthYearFromMatrix(matrixData);
+    return det ? det.monthNum : '10';
+  });
+  const [uploadYear, setUploadYear] = useState<string>(() => {
+    const saved = localStorage.getItem('melayu_cek_seribu_year');
+    if (saved) return saved;
+    const det = detectMonthYearFromMatrix(matrixData);
+    return det ? det.year : '2026';
+  });
 
   const MONTH_OPTIONS = [
     { value: '01', name: 'Januari' },
@@ -367,13 +391,29 @@ export default function KepegawaianSection({
     return certs;
   };
 
-  const handleMatrixDataChange = (newData: MatrixRowData[]) => {
+  const handleMatrixDataChange = (newData: MatrixRowData[], detectedM?: string, detectedY?: string) => {
+    let mVal = detectedM || uploadMonth;
+    let yVal = detectedY || uploadYear;
+
+    if (!detectedM && newData.length > 0) {
+      const det = detectMonthYearFromMatrix(newData);
+      if (det) {
+        mVal = det.monthNum;
+        yVal = det.year;
+      }
+    }
+
+    setUploadMonth(mVal);
+    setUploadYear(yVal);
+    safeLocalStorageSet('melayu_cek_seribu_month', mVal);
+    safeLocalStorageSet('melayu_cek_seribu_year', yVal);
+
     setMatrixData(newData);
     safeLocalStorageSet('melayu_cek_seribu_matrix', JSON.stringify(newData));
     saveFirestoreCollection('cek_seribu_matrix', newData);
 
     // Synchronize to certificates for Table & Card views
-    const certs = convertMatrixToCertificates(newData, uploadMonth, uploadYear);
+    const certs = convertMatrixToCertificates(newData, mVal, yVal);
     setUploadedCertificates(certs);
     safeLocalStorageSet('melayu_cek_seribu_jpeg', JSON.stringify(certs));
     saveFirestoreCollection('cek_seribu_certs', certs);
@@ -410,50 +450,17 @@ export default function KepegawaianSection({
   };
 
   const cekSeribuMonthDisplay = useMemo(() => {
-    const monthNames: Record<string, string> = {
-      '01': 'Januari', '1': 'Januari', 'jan': 'Januari', 'januari': 'Januari',
-      '02': 'Februari', '2': 'Februari', 'feb': 'Februari', 'februari': 'Februari',
-      '03': 'Maret', '3': 'Maret', 'mar': 'Maret', 'maret': 'Maret',
-      '04': 'April', '4': 'April', 'apr': 'April', 'april': 'April',
-      '05': 'Mei', '5': 'Mei', 'mei': 'Mei', 'may': 'Mei',
-      '06': 'Juni', '6': 'Juni', 'jun': 'Juni', 'juni': 'Juni',
-      '07': 'Juli', '7': 'Juli', 'jul': 'Juli', 'juli': 'Juli',
-      '08': 'Agustus', '8': 'Agustus', 'agu': 'Agustus', 'ags': 'Agustus', 'agustus': 'Agustus', 'aug': 'Agustus',
-      '09': 'September', '9': 'September', 'sep': 'September', 'september': 'September',
-      '10': 'Oktober', 'okt': 'Oktober', 'oktober': 'Oktober', 'oct': 'Oktober',
-      '11': 'November', 'nov': 'November', 'november': 'November',
-      '12': 'Desember', 'des': 'Desember', 'desember': 'Desember', 'dec': 'Desember'
-    };
-
-    if (uploadedCertificates && uploadedCertificates.length > 0) {
-      for (const cert of uploadedCertificates) {
-        if (!cert.uploadDate) continue;
-        const str = String(cert.uploadDate).toLowerCase().trim();
-
-        const numMatch = str.match(/(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{4})/);
-        if (numMatch) {
-          const m = numMatch[2].padStart(2, '0');
-          const y = numMatch[3];
-          if (monthNames[m]) return `${monthNames[m]} ${y}`;
-        }
-
-        const isoMatch = str.match(/(\d{4})[\/\.\-](\d{1,2})[\/\.\-](\d{1,2})/);
-        if (isoMatch) {
-          const y = isoMatch[1];
-          const m = isoMatch[2].padStart(2, '0');
-          if (monthNames[m]) return `${monthNames[m]} ${y}`;
-        }
-
-        for (const [k, v] of Object.entries(monthNames)) {
-          if (str.includes(k)) {
-            const yr = str.match(/\d{4}/);
-            return `${v} ${yr ? yr[0] : '2026'}`;
-          }
-        }
-      }
+    // 1. Prioritize detected month from matrixData (the imported Excel data or default matrix)
+    if (matrixData && matrixData.length > 0) {
+      const det = detectMonthYearFromMatrix(matrixData);
+      if (det) return `${det.monthName} ${det.year}`;
     }
-    return 'Agustus 2026';
-  }, [uploadedCertificates]);
+    // 2. Fall back to current uploadMonth and uploadYear
+    if (uploadMonth) {
+      return `${getMonthNameByNum(uploadMonth)} ${uploadYear}`;
+    }
+    return 'Juli 2026';
+  }, [matrixData, uploadMonth, uploadYear]);
 
   const parseFlexibleDate = (rawVal: any): string | null => {
     if (rawVal === undefined || rawVal === null || rawVal === '') return null;
@@ -622,14 +629,14 @@ export default function KepegawaianSection({
   }, [uploadedCertificates]);
 
   const handleDownloadExcelTemplate = () => {
-    // 2-row header matrix matching user screenshot
-    const row1 = ['Nama', '22-Jul-26', '', '23-Jul-26', '', '24-Jul-26', '', '27-Jul-26', ''];
-    const row2 = ['', 'Hadir', 'Pulang', 'Hadir', 'Pulang', 'Hadir', 'Pulang', 'Hadir', 'Pulang'];
+    // 2-row header matrix from tanggal awal ke tanggal akhir: 07-Okt-26 s.d. 12-Okt-26
+    const row1 = ['Nama', '07-Okt-26', '', '08-Okt-26', '', '09-Okt-26', '', '10-Okt-26', '', '11-Okt-26', '', '12-Okt-26', ''];
+    const row2 = ['', 'Hadir', 'Pulang', 'Hadir', 'Pulang', 'Hadir', 'Pulang', 'Hadir', 'Pulang', 'Hadir', 'Pulang', 'Hadir', 'Pulang'];
     const sampleRows = [
-      ['Andi Wijaya, S.E.', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada'],
-      ['Siti Rahma, M.Acc.', 'Ada', 'Ada', 'Ada', 'Tidak', 'Ada', 'Ada', 'Ada', 'Ada'],
-      ['Bambang Haryono, M.Si.', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada'],
-      ['Dewanti Putri, S.E.', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada']
+      ['Andi Wijaya, S.E.', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada'],
+      ['Siti Rahma, M.Acc.', 'Ada', 'Ada', 'Ada', 'Tidak', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada'],
+      ['Bambang Haryono, M.Si.', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada'],
+      ['Dewanti Putri, S.E.', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada', 'Ada']
     ];
 
     const worksheet = XLSX.utils.aoa_to_sheet([row1, row2, ...sampleRows]);
@@ -639,7 +646,9 @@ export default function KepegawaianSection({
       { s: { r: 0, c: 1 }, e: { r: 0, c: 2 } },
       { s: { r: 0, c: 3 }, e: { r: 0, c: 4 } },
       { s: { r: 0, c: 5 }, e: { r: 0, c: 6 } },
-      { s: { r: 0, c: 7 }, e: { r: 0, c: 8 } }
+      { s: { r: 0, c: 7 }, e: { r: 0, c: 8 } },
+      { s: { r: 0, c: 9 }, e: { r: 0, c: 10 } },
+      { s: { r: 0, c: 11 }, e: { r: 0, c: 12 } }
     ];
 
     worksheet['!merges'] = merges;
@@ -1014,24 +1023,21 @@ export default function KepegawaianSection({
             return;
           }
 
-          if (parsedEmployees[0]?.date) {
+          // Extract month and year from Excel parsed dates and filename
+          const allParsedDates = parsedEmployees.map(p => p.date).filter(Boolean) as string[];
+          const det = detectMonthYearFromStrings([
+            file.name,
+            firstSheetName,
+            ...allParsedDates
+          ]);
+          if (det) {
+            setUploadMonth(det.monthNum);
+            setUploadYear(det.year);
+            safeLocalStorageSet('melayu_cek_seribu_month', det.monthNum);
+            safeLocalStorageSet('melayu_cek_seribu_year', det.year);
+            setUploadForm(prev => ({ ...prev, uploadDate: `01-${det.monthNum}-${det.year}` }));
+          } else if (parsedEmployees[0]?.date) {
             setUploadForm(prev => ({ ...prev, uploadDate: parsedEmployees[0].date! }));
-            
-            // Extract month and year from Excel parsed date if available
-            const dateParts = parsedEmployees[0].date.split(/[\/\.\-]/);
-            if (dateParts.length === 3) {
-              let mVal = dateParts[1];
-              let yVal = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
-              if (mVal && yVal) {
-                const foundM = MONTH_OPTIONS.find(
-                  m => m.value === mVal.padStart(2, '0') || m.name.toLowerCase().startsWith(mVal.toLowerCase())
-                );
-                if (foundM) {
-                  setUploadMonth(foundM.value);
-                  setUploadYear(yVal);
-                }
-              }
-            }
           }
 
           const excelSvg = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400"><rect width="600" height="400" fill="%23107c41"/><rect x="40" y="40" width="520" height="320" rx="12" fill="%23ffffff"/><path d="M70 70h460v50H70z" fill="%23107c41"/><text x="90" y="102" fill="%23ffffff" font-family="sans-serif" font-weight="bold" font-size="20">DOKUMEN EXCEL PRESENSI CEK SERIBU</text><text x="90" y="160" fill="%23333333" font-family="sans-serif" font-weight="bold" font-size="16">Berkas: ${encodeURIComponent(file.name)}</text><text x="90" y="190" fill="%23666666" font-family="sans-serif" font-size="14">Jumlah Data Terbaca: ${parsedEmployees.length} Pegawai</text><rect x="90" y="220" width="420" height="2" fill="%23e2e8f0"/><text x="90" y="260" fill="%23107c41" font-family="sans-serif" font-weight="bold" font-size="14">Status: Terkonversi Otomatis ke Sistem Cek Seribu</text></svg>`;
@@ -1870,9 +1876,14 @@ export default function KepegawaianSection({
                 <Calendar className="w-4 h-4 text-djpb-blue" />
                 <span>Hasil Konversi & Rekapitulasi Presensi Cek Seribu</span>
               </div>
-              <span className="text-[10px] bg-emerald-100 text-emerald-900 border border-emerald-300/80 px-2.5 py-0.5 rounded font-mono font-extrabold">
-                Bulan Presensi: {cekSeribuMonthDisplay} / Cek Seribu
-              </span>
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] bg-emerald-100 text-emerald-900 border border-emerald-300/80 px-2.5 py-0.5 rounded font-mono font-extrabold">
+                  Bulan Presensi: {cekSeribuMonthDisplay} / Cek Seribu
+                </span>
+                <span className="text-[10px] bg-blue-100 text-blue-900 border border-blue-300/80 px-2 py-0.5 rounded font-mono font-extrabold hidden sm:inline-block">
+                  Urutan: 07 s.d. 12 Okt 2026 (Awal ke Akhir)
+                </span>
+              </div>
             </div>
 
             <div className="p-5 md:p-6 space-y-5">
@@ -1979,6 +1990,7 @@ export default function KepegawaianSection({
                   selectedMonth={uploadMonth}
                   selectedYear={uploadYear}
                   onDataChange={handleMatrixDataChange}
+                  onMonthYearChange={(m, y) => handleMonthYearChange(m, y)}
                 />
               ) : (
                 <>
