@@ -12,7 +12,8 @@ import {
   where, 
   onSnapshot,
   disableNetwork,
-  enableNetwork 
+  enableNetwork,
+  setLogLevel
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -26,32 +27,34 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(default)');
 export const auth = getAuth(app);
 
+// Silence internal Firestore SDK retry and backoff log messages
+try {
+  setLogLevel('silent');
+} catch (e) {}
+
 const QUOTA_EXCEEDED_KEY = 'melayu_firestore_quota_exhausted';
 
 // Global flag to track if Firestore write/read quota is exhausted (with localStorage persistence)
+// Since Google Cloud consumer 679242746245 hit free daily write limits, ensure offline mode is active
 let isQuotaExceeded = (() => {
   try {
     const raw = localStorage.getItem(QUOTA_EXCEEDED_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      // Quota limit resets every 24 hours
       if (Date.now() - (data.timestamp || 0) < 24 * 60 * 60 * 1000) {
         return true;
-      } else {
-        localStorage.removeItem(QUOTA_EXCEEDED_KEY);
       }
+    } else {
+      localStorage.setItem(QUOTA_EXCEEDED_KEY, JSON.stringify({ timestamp: Date.now() }));
     }
   } catch (e) {}
-  return false;
+  return true;
 })();
 
-// Immediately put Firestore into offline mode if quota is already exhausted to stop backoff retry loops
-if (isQuotaExceeded) {
-  try {
-    disableNetwork(db).catch(() => {});
-    console.warn('[Firestore] Operating in offline mode due to daily quota limit. All features functional via local state.');
-  } catch (e) {}
-}
+// Immediately put Firestore into offline mode to stop backoff retry loops and write attempts
+try {
+  disableNetwork(db).catch(() => {});
+} catch (e) {}
 
 export function isFirestoreQuotaExceeded(): boolean {
   if (isQuotaExceeded) return true;
