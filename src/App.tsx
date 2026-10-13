@@ -216,8 +216,7 @@ export default function App() {
           !(item?.dateStr || '').toLowerCase().includes('agustus') && !normalizeDateKey(item?.dateStr || '').startsWith('2026-08')
         )
       : clean;
-    const aligned = hasOctober ? alignOctoberRosterToPattern(filtered) : filtered;
-    return sortRosterChronologically(aligned);
+    return sortRosterChronologically(filtered);
   });
 
   const [scholarships, setScholarships] = useState<ScholarshipInfo[]>(() => {
@@ -274,11 +273,41 @@ export default function App() {
     const unsubGkm = subscribeFirestoreCollection<GKMAgreement>('gkm', INITIAL_GKM_AGREEMENTS, setGkmList);
     const unsubRealizations = subscribeFirestoreCollection<RealizationProgress>('realizations', INITIAL_REALIZATION_PROGRESS, setRealizations);
     const unsubVisitors = subscribeFirestoreCollection<VisitorLog>('visitors', INITIAL_VISITOR_LOGS, setVisitorLogs);
-    const unsubShifts = subscribeFirestoreCollection<SecurityShift>('security_shifts', INITIAL_SECURITY_SHIFTS, setSecurityShifts);
+    const unsubShifts = subscribeFirestoreCollection<SecurityShift>('security_shifts', INITIAL_SECURITY_SHIFTS, (data) => {
+      const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
+      if (isCustomUploaded) {
+        const localStr = localStorage.getItem('melayu_security_shifts');
+        if (localStr) {
+          try {
+            const localShifts = JSON.parse(localStr);
+            if (Array.isArray(localShifts) && localShifts.length > 0) {
+              setSecurityShifts(localShifts);
+              return;
+            }
+          } catch (e) {}
+        }
+      }
+      setSecurityShifts(data);
+    });
     const unsubRoster = subscribeFirestoreCollection<SecurityRosterItem>(
       'security_roster', 
       INITIAL_SECURITY_ROSTER, 
       (data) => {
+        // If administrator has uploaded custom Excel file, keep it as authoritative
+        const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
+        if (isCustomUploaded) {
+          const localStr = localStorage.getItem('melayu_security_roster');
+          if (localStr) {
+            try {
+              const localRoster = JSON.parse(localStr);
+              if (Array.isArray(localRoster) && localRoster.length > 0) {
+                setSecurityRoster(localRoster);
+                return;
+              }
+            } catch (e) {}
+          }
+        }
+
         if (Array.isArray(data) && data.length > 0) {
           const cleanData = deduplicateRoster(data);
           
@@ -292,12 +321,8 @@ export default function App() {
               )
             : cleanData;
 
-          // Pastikan Jam Hadir / Shift Mulai Jumat/ 2 Oktober s.d. Sabtu/ 31 Oktober 2026 sama polanya dengan Kamis/ 1 Oktober 2026:
-          // 2 petugas Pagi (06.00/18.00), 2 petugas Malam (18.00/06.00), 1 petugas Rumdin (18.00/06.00), 1 petugas Libur (-)
-          const aligned = hasOctober ? alignOctoberRosterToPattern(filtered) : filtered;
-
           // Sort strictly chronologically by Hari, Tanggal, dan Jam!
-          const sorted = sortRosterChronologically(aligned);
+          const sorted = sortRosterChronologically(filtered);
           setSecurityRoster(sorted);
         }
       }

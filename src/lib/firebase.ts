@@ -1,5 +1,19 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, doc, setDoc, updateDoc, deleteDoc, getDoc, query, where, onSnapshot } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  collection, 
+  getDocs, 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  getDoc, 
+  query, 
+  where, 
+  onSnapshot,
+  disableNetwork,
+  enableNetwork 
+} from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { INITIAL_USERS } from '../mockData';
@@ -12,16 +26,66 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(default)');
 export const auth = getAuth(app);
 
-// Global flag to track if Firestore write/read quota is exhausted
-let isQuotaExceeded = false;
+const QUOTA_EXCEEDED_KEY = 'melayu_firestore_quota_exhausted';
 
-function checkAndSetQuotaError(error: any): boolean {
+// Global flag to track if Firestore write/read quota is exhausted (with localStorage persistence)
+let isQuotaExceeded = (() => {
+  try {
+    const raw = localStorage.getItem(QUOTA_EXCEEDED_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      // Quota limit resets every 24 hours
+      if (Date.now() - (data.timestamp || 0) < 24 * 60 * 60 * 1000) {
+        return true;
+      } else {
+        localStorage.removeItem(QUOTA_EXCEEDED_KEY);
+      }
+    }
+  } catch (e) {}
+  return false;
+})();
+
+// Immediately put Firestore into offline mode if quota is already exhausted to stop backoff retry loops
+if (isQuotaExceeded) {
+  try {
+    disableNetwork(db).catch(() => {});
+    console.warn('[Firestore] Operating in offline mode due to daily quota limit. All features functional via local state.');
+  } catch (e) {}
+}
+
+export function isFirestoreQuotaExceeded(): boolean {
+  if (isQuotaExceeded) return true;
+  try {
+    const raw = localStorage.getItem(QUOTA_EXCEEDED_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (Date.now() - (data.timestamp || 0) < 24 * 60 * 60 * 1000) {
+        isQuotaExceeded = true;
+        return true;
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
+export function checkAndSetQuotaError(error: any): boolean {
   if (!error) return false;
-  const str = String(error.code || error.message || error).toLowerCase();
-  if (str.includes('resource-exhausted') || str.includes('quota') || str.includes('limit exceeded')) {
+  const str = String(error?.code || error?.message || error).toLowerCase();
+  if (
+    str.includes('resource-exhausted') || 
+    str.includes('quota') || 
+    str.includes('limit exceeded') || 
+    error?.code === 'resource-exhausted'
+  ) {
     if (!isQuotaExceeded) {
       isQuotaExceeded = true;
-      console.warn('Firestore write/read quota limit exceeded. Falling back to local state and localStorage.');
+      try {
+        localStorage.setItem(QUOTA_EXCEEDED_KEY, JSON.stringify({ timestamp: Date.now() }));
+      } catch (e) {}
+      try {
+        disableNetwork(db).catch(() => {});
+      } catch (e) {}
+      console.warn('[Firestore] Quota limit reached. Offline/local mode activated smoothly.');
     }
     return true;
   }
@@ -36,21 +100,13 @@ export async function syncInitialUsersToFirestore(): Promise<UserAccount[]> {
   const local = localStorage.getItem('melayu_users');
   const fallback = local ? JSON.parse(local) : INITIAL_USERS;
 
-  if (isQuotaExceeded) return fallback;
+  if (isFirestoreQuotaExceeded()) return fallback;
 
   try {
     const usersRef = collection(db, USERS_COLLECTION);
     const snapshot = await getDocs(usersRef);
 
     if (snapshot.empty) {
-      console.log('Seeding initial users to Firebase Firestore...');
-      try {
-        for (const u of INITIAL_USERS) {
-          await setDoc(doc(db, USERS_COLLECTION, u.id), u);
-        }
-      } catch (e) {
-        checkAndSetQuotaError(e);
-      }
       return INITIAL_USERS;
     } else {
       const users: UserAccount[] = [];
@@ -263,7 +319,7 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
     }
   } catch (e) {}
 
-  if (isQuotaExceeded) {
+  if (isFirestoreQuotaExceeded()) {
     onUpdate(getLocalFallback());
     return () => {};
   }
@@ -274,27 +330,21 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
       colRef,
       async (snapshot) => {
         const seededMarkerKey = `melayu_${collectionName}_seeded_v4`;
-        const isLocallyMarkedSeeded = localStorage.getItem(seededMarkerKey) === 'true';
+        const isCustomUploaded = localStorage.getItem(`melayu_${collectionName}_custom_uploaded`) === 'true';
 
-        if (snapshot.empty && !isLocallyMarkedSeeded && initialData && initialData.length > 0) {
-          console.log(`[Firestore] Seeding initial ${collectionName}...`);
+        if (snapshot.empty && initialData && initialData.length > 0) {
+          if (isCustomUploaded) {
+            const fallback = getLocalFallback();
+            if (fallback && fallback.length > 0) {
+              onUpdate(fallback);
+              return;
+            }
+          }
           onUpdate(initialData);
           localStorage.setItem(seededMarkerKey, 'true');
           try {
             localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(initialData));
           } catch (e) {}
-
-          if (!isQuotaExceeded) {
-            try {
-              for (let i = 0; i < initialData.length; i++) {
-                const item = initialData[i];
-                const docId = item.id ? String(item.id) : `doc_${i}`;
-                await setDoc(doc(db, collectionName, docId), sanitizeForFirestore({ ...item, id: docId }));
-              }
-            } catch (seedErr) {
-              checkAndSetQuotaError(seedErr);
-            }
-          }
         } else if (!snapshot.empty) {
           localStorage.setItem(seededMarkerKey, 'true');
           const remoteItems: T[] = [];
@@ -306,7 +356,16 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
             }
           });
 
-          // Cloud is the single source of truth across PC & Handphone
+          // If local data was custom uploaded by administrator and Firestore is in quota error or remote items are stale
+          if (isCustomUploaded && isFirestoreQuotaExceeded()) {
+            const fallback = getLocalFallback();
+            if (fallback && fallback.length > 0) {
+              onUpdate(fallback);
+              return;
+            }
+          }
+
+          // Cloud is the source of truth across devices
           onUpdate(remoteItems);
           try {
             localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(remoteItems));
@@ -314,7 +373,13 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
             console.warn(`Unable to cache ${collectionName} in localStorage:`, e);
           }
         } else {
-          // Snapshot is empty and was previously seeded (e.g. all items were deleted from PC)
+          if (isCustomUploaded) {
+            const fallback = getLocalFallback();
+            if (fallback && fallback.length > 0) {
+              onUpdate(fallback);
+              return;
+            }
+          }
           onUpdate([]);
           try {
             localStorage.setItem(`melayu_${collectionName}`, JSON.stringify([]));
@@ -359,14 +424,12 @@ export async function saveFirestoreDoc<T extends { id?: string | number }>(
     console.warn(`[saveFirestoreDoc] Local cache error for ${collectionName}:`, cacheErr);
   }
 
-  if (isQuotaExceeded) return;
+  if (isFirestoreQuotaExceeded()) return;
   try {
     const itemRef = doc(db, collectionName, docId);
     const sanitized = sanitizeForFirestore({ ...item, id: docId });
     await setDoc(itemRef, sanitized, { merge: true });
-    console.log(`[saveFirestoreDoc] Successfully synced ${collectionName}/${docId} to Cloud.`);
   } catch (error) {
-    console.error(`[saveFirestoreDoc] Error saving ${collectionName}/${docId} to Firestore:`, error);
     checkAndSetQuotaError(error);
   }
 }
@@ -391,7 +454,7 @@ export async function deleteFirestoreDoc(
     }
   } catch (e) {}
 
-  if (isQuotaExceeded) return;
+  if (isFirestoreQuotaExceeded()) return;
   try {
     // 2. Delete direct doc by ID in Firestore
     const itemRef = doc(db, collectionName, targetId);
@@ -424,9 +487,10 @@ export async function saveFirestoreCollection<T extends { id?: string | number }
   try {
     localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(items));
     localStorage.setItem(`melayu_${collectionName}_seeded_v4`, 'true');
+    localStorage.setItem(`melayu_${collectionName}_updated_at`, String(Date.now()));
   } catch (e) {}
 
-  if (isQuotaExceeded) return;
+  if (isFirestoreQuotaExceeded()) return;
   try {
     const colRef = collection(db, collectionName);
     const existingSnap = await getDocs(colRef);

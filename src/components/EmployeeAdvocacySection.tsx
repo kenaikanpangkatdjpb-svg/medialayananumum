@@ -104,7 +104,7 @@ export default function EmployeeAdvocacySection({
             const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
             const merged = [...clean, ...ea11Seed];
             setRecords(merged);
-            ea11Seed.forEach(item => saveFirestoreDoc('employee_advocacy', item));
+            safeLocalStorageSet('melayu_ea_records', JSON.stringify(merged));
           } else {
             setRecords(clean);
           }
@@ -955,6 +955,9 @@ export default function EmployeeAdvocacySection({
                 <span className="px-2.5 py-0.5 bg-white/10 text-sky-200 text-[11px] font-bold rounded-full tracking-wide uppercase border border-white/10">
                   Layanan Informasi Publikasi
                 </span>
+                <span className="px-2.5 py-0.5 bg-amber-400 text-slate-950 text-[11px] font-black rounded-full uppercase shadow-xs">
+                  Target Edisi: EA 11
+                </span>
                 <span className="flex items-center space-x-1 text-emerald-400 text-xs font-semibold">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                   <span>Live Monitoring</span>
@@ -962,10 +965,10 @@ export default function EmployeeAdvocacySection({
               </div>
               <h1 className="text-xl md:text-2xl font-display font-extrabold tracking-tight text-white flex items-center space-x-2.5">
                 <Share2 className="w-6 h-6 text-sky-300" />
-                <span>Monitoring Pengisian Employee Advocacy</span>
+                <span>Monitoring Pengisian Employee Advocacy EA 11</span>
               </h1>
               <p className="text-xs md:text-sm text-slate-300 max-w-2xl">
-                Pantauan tingkat kepatuhan dan status pengisian Employee Advocacy seluruh pegawai Kantor Wilayah DJPb Provinsi Riau.
+                Pantauan tingkat kepatuhan dan status pengisian Employee Advocacy EA 11 seluruh pegawai Kantor Wilayah DJPb Provinsi Riau.
               </p>
             </div>
           </div>

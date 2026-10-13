@@ -77,7 +77,7 @@ export default function Sidebar({
     {
       title: 'INFORMASI',
       items: [
-        { id: 'monitoring-ea', label: 'Monitoring Pengisian Employee Advocacy', icon: Share2 },
+        { id: 'monitoring-ea', label: 'Monitoring Pengisian Employee Advocacy EA 11', icon: Share2 },
         { id: 'logout', label: 'Logout / Keluar KPPN', icon: LogOut },
       ]
     }
@@ -123,7 +123,7 @@ export default function Sidebar({
     {
       title: 'INFORMASI',
       items: [
-        { id: 'monitoring-ea', label: 'Monitoring Pengisian Employee Advocacy', icon: Share2 },
+        { id: 'monitoring-ea', label: 'Monitoring Pengisian Employee Advocacy EA 11', icon: Share2 },
         { id: 'pengawasan-penjagaan', label: 'Pengawasan Penjagaan Keamanan', icon: Shield },
         { id: 'rencana-pengadaan', label: 'Rencana Pengadaan Barang', icon: ShoppingCart },
         { id: 'logout', label: 'Logout / Keluar Pegawai', icon: LogOut },
@@ -171,7 +171,7 @@ export default function Sidebar({
     {
       title: 'INFORMASI',
       items: [
-        { id: 'monitoring-ea', label: 'Monitoring Pengisian Employee Advocacy', icon: Share2 },
+        { id: 'monitoring-ea', label: 'Monitoring Pengisian Employee Advocacy EA 11', icon: Share2 },
         { id: 'pengawasan-penjagaan', label: 'Pengawasan Penjagaan Keamanan', icon: Shield },
         { id: 'rencana-pengadaan', label: 'Rencana Pengadaan Barang', icon: ShoppingCart },
       ]
