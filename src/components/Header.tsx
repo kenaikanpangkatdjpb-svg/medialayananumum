@@ -74,6 +74,19 @@ export default function Header({
 
       {/* Right side Actions */}
       <div className="flex items-center space-x-1 sm:space-x-2 shrink-0" id="header-actions">
+        {/* Production Domain Connection Indicator */}
+        <a
+          href="https://www.medialayananumum.my.id/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-[11px] font-semibold transition-all cursor-pointer"
+          title="Buka Website Produksi: https://www.medialayananumum.my.id/"
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>Live: medialayananumum.my.id</span>
+          <ExternalLink className="w-3 h-3 text-emerald-600" />
+        </a>
+
         {/* Notifications Bell */}
         <div className="relative">
           <button

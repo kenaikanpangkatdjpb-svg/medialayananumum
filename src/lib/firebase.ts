@@ -13,7 +13,8 @@ import {
   onSnapshot,
   disableNetwork,
   enableNetwork,
-  setLogLevel
+  setLogLevel,
+  writeBatch
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -32,43 +33,31 @@ try {
   setLogLevel('silent');
 } catch (e) {}
 
-const QUOTA_EXCEEDED_KEY = 'melayu_firestore_quota_exhausted';
+const WRITE_QUOTA_KEY = 'melayu_firestore_write_quota_exhausted';
 
-// Global flag to track if Firestore write/read quota is exhausted (with localStorage persistence)
-// Since Google Cloud consumer 679242746245 hit free daily write limits, ensure offline mode is active
-let isQuotaExceeded = (() => {
-  try {
-    const raw = localStorage.getItem(QUOTA_EXCEEDED_KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (Date.now() - (data.timestamp || 0) < 24 * 60 * 60 * 1000) {
-        return true;
-      }
-    } else {
-      localStorage.setItem(QUOTA_EXCEEDED_KEY, JSON.stringify({ timestamp: Date.now() }));
-    }
-  } catch (e) {}
-  return true;
-})();
-
-// Immediately put Firestore into offline mode to stop backoff retry loops and write attempts
+// Ensure network is active for reads
 try {
-  disableNetwork(db).catch(() => {});
+  enableNetwork(db).catch(() => {});
 } catch (e) {}
 
-export function isFirestoreQuotaExceeded(): boolean {
-  if (isQuotaExceeded) return true;
+// Check whether write operations should be temporarily paused due to daily write quota exhaustion
+export function isFirestoreWriteBlocked(): boolean {
   try {
-    const raw = localStorage.getItem(QUOTA_EXCEEDED_KEY);
+    const raw = localStorage.getItem(WRITE_QUOTA_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (Date.now() - (data.timestamp || 0) < 24 * 60 * 60 * 1000) {
-        isQuotaExceeded = true;
+      // Cooldown for write quota: check if last error was within 30 minutes
+      if (Date.now() - (data.timestamp || 0) < 30 * 60 * 1000) {
         return true;
       }
     }
   } catch (e) {}
   return false;
+}
+
+// Backward-compatible helper for write checks
+export function isFirestoreQuotaExceeded(): boolean {
+  return isFirestoreWriteBlocked();
 }
 
 export function checkAndSetQuotaError(error: any): boolean {
@@ -80,16 +69,10 @@ export function checkAndSetQuotaError(error: any): boolean {
     str.includes('limit exceeded') || 
     error?.code === 'resource-exhausted'
   ) {
-    if (!isQuotaExceeded) {
-      isQuotaExceeded = true;
-      try {
-        localStorage.setItem(QUOTA_EXCEEDED_KEY, JSON.stringify({ timestamp: Date.now() }));
-      } catch (e) {}
-      try {
-        disableNetwork(db).catch(() => {});
-      } catch (e) {}
-      console.warn('[Firestore] Quota limit reached. Offline/local mode activated smoothly.');
-    }
+    try {
+      localStorage.setItem(WRITE_QUOTA_KEY, JSON.stringify({ timestamp: Date.now() }));
+    } catch (e) {}
+    console.warn('[Firestore] Write quota limit reached on Google Cloud free tier. Local cache active.');
     return true;
   }
   return false;
@@ -128,8 +111,6 @@ export async function syncInitialUsersToFirestore(): Promise<UserAccount[]> {
 export async function getUsersFromFirestore(): Promise<UserAccount[]> {
   const local = localStorage.getItem('melayu_users');
   const fallback: UserAccount[] = local ? JSON.parse(local) : INITIAL_USERS;
-
-  if (isQuotaExceeded) return fallback;
 
   try {
     const usersRef = collection(db, USERS_COLLECTION);
@@ -174,7 +155,7 @@ export async function saveUserToFirestore(user: UserAccount): Promise<void> {
     localStorage.setItem('melayu_users', JSON.stringify(usersList));
   } catch (e) {}
 
-  if (isQuotaExceeded) return;
+  if (isFirestoreWriteBlocked()) return;
   try {
     const userRef = doc(db, USERS_COLLECTION, user.id);
     await setDoc(userRef, user, { merge: true });
@@ -194,7 +175,7 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
     }
   } catch (e) {}
 
-  if (isQuotaExceeded) return;
+  if (isFirestoreWriteBlocked()) return;
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
     await deleteDoc(userRef);
@@ -314,7 +295,7 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
     return initialData;
   };
 
-  // Provide immediate local cache to prevent UI flash while connecting
+  // 1. Provide immediate local cache to prevent UI flash while connecting
   try {
     const immediateData = getLocalFallback();
     if (immediateData && immediateData.length > 0) {
@@ -322,32 +303,43 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
     }
   } catch (e) {}
 
-  if (isFirestoreQuotaExceeded()) {
-    onUpdate(getLocalFallback());
-    return () => {};
-  }
-
   try {
     const colRef = collection(db, collectionName);
     const unsubscribe = onSnapshot(
       colRef,
       async (snapshot) => {
         const seededMarkerKey = `melayu_${collectionName}_seeded_v4`;
+        const clearedMarkerKey = `melayu_${collectionName}_cleared`;
         const isCustomUploaded = localStorage.getItem(`melayu_${collectionName}_custom_uploaded`) === 'true';
+        const isCleared = localStorage.getItem(clearedMarkerKey) === 'true';
 
-        if (snapshot.empty && initialData && initialData.length > 0) {
-          if (isCustomUploaded) {
-            const fallback = getLocalFallback();
-            if (fallback && fallback.length > 0) {
-              onUpdate(fallback);
-              return;
-            }
+        if (snapshot.empty) {
+          // If the administrator has explicitly cleared or emptied this collection, keep it empty!
+          if (isCleared) {
+            onUpdate([]);
+            return;
           }
-          onUpdate(initialData);
-          localStorage.setItem(seededMarkerKey, 'true');
-          try {
-            localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(initialData));
-          } catch (e) {}
+          // If this collection was already seeded in the past, an empty snapshot means the items were deleted!
+          if (localStorage.getItem(seededMarkerKey) === 'true') {
+            onUpdate([]);
+            return;
+          }
+          if (initialData && initialData.length > 0) {
+            if (isCustomUploaded) {
+              const fallback = getLocalFallback();
+              if (fallback && fallback.length > 0) {
+                onUpdate(fallback);
+                return;
+              }
+            }
+            onUpdate(initialData);
+            localStorage.setItem(seededMarkerKey, 'true');
+            try {
+              localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(initialData));
+            } catch (e) {}
+          } else {
+            onUpdate([]);
+          }
         } else if (!snapshot.empty) {
           localStorage.setItem(seededMarkerKey, 'true');
           const remoteItems: T[] = [];
@@ -359,8 +351,14 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
             }
           });
 
-          // If local data was custom uploaded by administrator and Firestore is in quota error or remote items are stale
-          if (isCustomUploaded && isFirestoreQuotaExceeded()) {
+          // If local collection was explicitly marked cleared recently, do not overwrite with remote stale data
+          if (isCleared) {
+            onUpdate([]);
+            return;
+          }
+
+          // If local data was custom uploaded by administrator and Firestore write is blocked
+          if (isCustomUploaded && isFirestoreWriteBlocked()) {
             const fallback = getLocalFallback();
             if (fallback && fallback.length > 0) {
               onUpdate(fallback);
@@ -376,13 +374,6 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
             console.warn(`Unable to cache ${collectionName} in localStorage:`, e);
           }
         } else {
-          if (isCustomUploaded) {
-            const fallback = getLocalFallback();
-            if (fallback && fallback.length > 0) {
-              onUpdate(fallback);
-              return;
-            }
-          }
           onUpdate([]);
           try {
             localStorage.setItem(`melayu_${collectionName}`, JSON.stringify([]));
@@ -453,29 +444,18 @@ export async function deleteFirestoreDoc(
         const filtered = currentList.filter(it => String(it.id) !== targetId);
         localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(filtered));
         localStorage.setItem(`melayu_${collectionName}_seeded_v4`, 'true');
+        if (filtered.length === 0) {
+          localStorage.setItem(`melayu_${collectionName}_cleared`, 'true');
+        }
       }
     }
   } catch (e) {}
 
-  if (isFirestoreQuotaExceeded()) return;
+  if (isFirestoreWriteBlocked()) return;
   try {
     // 2. Delete direct doc by ID in Firestore
     const itemRef = doc(db, collectionName, targetId);
     await deleteDoc(itemRef);
-
-    // 3. Scan and delete any duplicate doc where data.id matches targetId
-    const colRef = collection(db, collectionName);
-    const snapshot = await getDocs(colRef);
-    const deletePromises: Promise<void>[] = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      if (docSnap.id === targetId || data.id === targetId || String(data.id) === targetId) {
-        deletePromises.push(deleteDoc(doc(db, collectionName, docSnap.id)));
-      }
-    });
-    if (deletePromises.length > 0) {
-      await Promise.all(deletePromises);
-    }
   } catch (error) {
     checkAndSetQuotaError(error);
   }
@@ -486,41 +466,71 @@ export async function saveFirestoreCollection<T extends { id?: string | number }
   collectionName: string,
   items: T[]
 ): Promise<void> {
-  // Update local cache immediately
+  // Update local cache immediately for zero UI delay
   try {
     localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(items));
     localStorage.setItem(`melayu_${collectionName}_seeded_v4`, 'true');
     localStorage.setItem(`melayu_${collectionName}_updated_at`, String(Date.now()));
+    if (items.length === 0) {
+      localStorage.setItem(`melayu_${collectionName}_cleared`, 'true');
+    } else {
+      localStorage.removeItem(`melayu_${collectionName}_cleared`);
+    }
   } catch (e) {}
 
-  if (isFirestoreQuotaExceeded()) return;
+  if (isFirestoreWriteBlocked()) return;
+
   try {
-    const colRef = collection(db, collectionName);
-    const existingSnap = await getDocs(colRef);
-    const existingIds = new Set<string>();
-    existingSnap.forEach((docSnap) => existingIds.add(docSnap.id));
+    // If saving security_roster or shifts, clean up old/stray docs so no previous months leak in
+    const newDocIds = new Set<string>();
+    const docMap = new Map<string, any>();
 
-    const newIds = new Set<string>();
-
-    // 1. Write or update all items
-    for (let i = 0; i < items.length; i++) {
-      if (isQuotaExceeded) break;
-      const item = items[i];
-      const docId = item.id ? String(item.id) : `doc_${i}`;
-      newIds.add(docId);
-      const sanitized = sanitizeForFirestore({ ...item, id: docId });
-      await setDoc(doc(db, collectionName, docId), sanitized);
+    const maxItems = Math.min(items.length, 350);
+    for (let i = 0; i < maxItems; i++) {
+      const it = items[i];
+      const docId = it.id ? String(it.id) : `doc_${i}`;
+      newDocIds.add(docId);
+      docMap.set(docId, sanitizeForFirestore({ ...it, id: docId }));
     }
 
-    // 2. Clean up any previous documents that no longer exist in the new set
-    const deletePromises: Promise<void>[] = [];
-    existingIds.forEach((id) => {
-      if (!newIds.has(id)) {
-        deletePromises.push(deleteDoc(doc(db, collectionName, id)));
+    // Attempt to query existing docs to remove orphaned docs (e.g. old September docs)
+    let obsoleteDocRefs: any[] = [];
+    try {
+      const existingSnap = await getDocs(collection(db, collectionName));
+      existingSnap.docs.forEach(docSnap => {
+        if (!newDocIds.has(docSnap.id)) {
+          obsoleteDocRefs.push(docSnap.ref);
+        }
+      });
+    } catch (e) {}
+
+    let batch = writeBatch(db);
+    let opCount = 0;
+
+    // Delete obsolete docs first (purging previous month or orphan entries)
+    for (const ref of obsoleteDocRefs) {
+      batch.delete(ref);
+      opCount++;
+      if (opCount >= 450) {
+        await batch.commit();
+        batch = writeBatch(db);
+        opCount = 0;
       }
-    });
-    if (deletePromises.length > 0) {
-      await Promise.all(deletePromises);
+    }
+
+    // Set new docs
+    for (const [docId, data] of docMap.entries()) {
+      batch.set(doc(db, collectionName, docId), data);
+      opCount++;
+      if (opCount >= 450) {
+        await batch.commit();
+        batch = writeBatch(db);
+        opCount = 0;
+      }
+    }
+
+    if (opCount > 0) {
+      await batch.commit();
     }
   } catch (error) {
     checkAndSetQuotaError(error);

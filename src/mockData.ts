@@ -448,35 +448,43 @@ export const INITIAL_VISITOR_LOGS: VisitorLog[] = [
   }
 ];
 
-export const INITIAL_SECURITY_SHIFTS: SecurityShift[] = [
-  { day: 'Senin', shiftMorning: 'ARIEF / ROBBY', shiftEvening: 'ADITYA / ERWIN', shiftNight: 'RATMANSYAH / DIAN ARI' },
-  { day: 'Selasa', shiftMorning: 'ROBBY / DIAN ARI', shiftEvening: 'ERWIN / RATMANSYAH', shiftNight: 'ARIEF / ADITYA' },
-  { day: 'Rabu', shiftMorning: 'DIAN ARI / ADITYA', shiftEvening: 'RATMANSYAH / ARIEF', shiftNight: 'ROBBY / ERWIN' },
-  { day: 'Kamis', shiftMorning: 'ADITYA / ERWIN', shiftEvening: 'ARIEF / ROBBY', shiftNight: 'DIAN ARI / RATMANSYAH' },
-  { day: 'Jumat', shiftMorning: 'ERWIN / RATMANSYAH', shiftEvening: 'ROBBY / DIAN ARI', shiftNight: 'ADITYA / ARIEF' },
-  { day: 'Sabtu', shiftMorning: 'RATMANSYAH / ARIEF', shiftEvening: 'DIAN ARI / ADITYA', shiftNight: 'ERWIN / ROBBY' },
-  { day: 'Minggu', shiftMorning: 'ARIEF / ADITYA', shiftEvening: 'ERWIN / RATMANSYAH', shiftNight: 'ROBBY / DIAN ARI' }
-];
-
 const DAYS_OF_WEEK = ['SABTU', 'MINGGU', 'SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT'];
+const ID_DAY_NAMES = ['MINGGU', 'SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU'];
 
-// 6-day rotation patterns for security guard shifts:
-// Position 1: KANWIL DJPB (06.00/18.00)
-// Position 2: KANWIL DJPB (06.00/18.00)
-// Position 3: KANWIL DJPB (18.00/06.00)
-// Position 4: KANWIL DJPB (18.00/06.00)
-// Position 5: RUMAH DINAS (18.00/06.00)
+// 6-day rotation patterns for security guard shifts (Sesuai Jadwal Resmi Kanwil DJPb Riau):
+// Position 1: KANWIL DJPB (06.00/18.00) - Shift Pagi 1
+// Position 2: KANWIL DJPB (06.00/18.00) - Shift Pagi 2
+// Position 3: KANWIL DJPB (18.00/06.00) - Shift Malam 1
+// Position 4: KANWIL DJPB (18.00/06.00) - Shift Malam 2
+// Position 5: RUMAH DINAS (18.00/06.00) - Pos Rumah Dinas
 // Position 6: LIBUR (-)
 const ROTATION_PATTERNS = [
-  ['ARIEF', 'ROBBY', 'ADITYA', 'ERWIN', 'RATMANSYAH', 'DIAN ARI'],
   ['ROBBY', 'DIAN ARI', 'ERWIN', 'RATMANSYAH', 'ARIEF', 'ADITYA'],
   ['DIAN ARI', 'ADITYA', 'RATMANSYAH', 'ARIEF', 'ROBBY', 'ERWIN'],
   ['ADITYA', 'ERWIN', 'ARIEF', 'ROBBY', 'DIAN ARI', 'RATMANSYAH'],
   ['ERWIN', 'RATMANSYAH', 'ROBBY', 'DIAN ARI', 'ADITYA', 'ARIEF'],
   ['RATMANSYAH', 'ARIEF', 'DIAN ARI', 'ADITYA', 'ERWIN', 'ROBBY'],
+  ['ARIEF', 'ROBBY', 'ADITYA', 'ERWIN', 'RATMANSYAH', 'DIAN ARI'],
 ];
 
-const ID_DAY_NAMES = ['MINGGU', 'SENIN', 'SELASA', 'RABU', 'KAMIS', 'JUMAT', 'SABTU'];
+export function generateOctoberSecurityShifts(): SecurityShift[] {
+  const shifts: SecurityShift[] = [];
+  for (let day = 1; day <= 31; day++) {
+    const d = new Date(2026, 9, day);
+    const dayOfWeek = ID_DAY_NAMES[d.getDay()];
+    const dateStr = `${dayOfWeek}/ ${day} Oktober 2026`;
+    const pattern = ROTATION_PATTERNS[(day - 1) % 6];
+    shifts.push({
+      day: dateStr,
+      shiftMorning: `${pattern[0]} / ${pattern[1]}`,
+      shiftEvening: '-',
+      shiftNight: `${pattern[2]} / ${pattern[3]} / ${pattern[4]} (Rumdin)`
+    });
+  }
+  return shifts;
+}
+
+export const INITIAL_SECURITY_SHIFTS: SecurityShift[] = generateOctoberSecurityShifts();
 
 export function generateOctoberSecurityRoster(): SecurityRosterItem[] {
   const roster: SecurityRosterItem[] = [];
@@ -488,7 +496,7 @@ export function generateOctoberSecurityRoster(): SecurityRosterItem[] {
     const dayOfWeek = ID_DAY_NAMES[d.getDay()];
     const dateStr = `${dayOfWeek}/ ${day} Oktober 2026`;
     const pattern = ROTATION_PATTERNS[(day - 1) % 6];
-
+    // 6 duty positions per day matching image.png (5 active + 1 LIBUR)
     roster.push(
       { id: `ros-${String(idCounter).padStart(3, '0')}`, orderIndex: idCounter - 1, name: pattern[0], dateStr, location: 'KANWIL DJPB', hours: '06.00/18.00' },
       { id: `ros-${String(idCounter + 1).padStart(3, '0')}`, orderIndex: idCounter, name: pattern[1], dateStr, location: 'KANWIL DJPB', hours: '06.00/18.00' },
@@ -517,10 +525,9 @@ export function generateAugustSecurityRoster(): SecurityRosterItem[] {
       { id: `ros-aug-${String(idCounter + 1).padStart(3, '0')}`, orderIndex: idCounter, name: pattern[1], dateStr, location: 'KANWIL DJPB', hours: '06.00/18.00' },
       { id: `ros-aug-${String(idCounter + 2).padStart(3, '0')}`, orderIndex: idCounter + 1, name: pattern[2], dateStr, location: 'KANWIL DJPB', hours: '18.00/06.00' },
       { id: `ros-aug-${String(idCounter + 3).padStart(3, '0')}`, orderIndex: idCounter + 2, name: pattern[3], dateStr, location: 'KANWIL DJPB', hours: '18.00/06.00' },
-      { id: `ros-aug-${String(idCounter + 4).padStart(3, '0')}`, orderIndex: idCounter + 3, name: pattern[4], dateStr, location: 'RUMAH DINAS', hours: '18.00/06.00' },
-      { id: `ros-aug-${String(idCounter + 5).padStart(3, '0')}`, orderIndex: idCounter + 4, name: pattern[5], dateStr, location: 'LIBUR', hours: '-' }
+      { id: `ros-aug-${String(idCounter + 4).padStart(3, '0')}`, orderIndex: idCounter + 3, name: pattern[4], dateStr, location: 'RUMAH DINAS', hours: '18.00/06.00' }
     );
-    idCounter += 6;
+    idCounter += 5;
   }
 
   return roster;

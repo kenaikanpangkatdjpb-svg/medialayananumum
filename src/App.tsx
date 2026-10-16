@@ -208,15 +208,27 @@ export default function App() {
     const parsed = safeParse<SecurityRosterItem[]>('melayu_security_roster', INITIAL_SECURITY_ROSTER);
     const source = Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_SECURITY_ROSTER;
     const clean = deduplicateRoster(source);
+    let storedTitle = localStorage.getItem('melayu_security_doc_title') || '';
+    if (!storedTitle || storedTitle.toUpperCase().includes('SEPTEMBER')) {
+      storedTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
+      localStorage.setItem('melayu_security_doc_title', storedTitle);
+    }
+    const isOctoberActive = storedTitle.toUpperCase().includes('OKTOBER');
     const hasOctober = clean.some(item => 
-      (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '').startsWith('2026-10')
+      (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '', 10, 2026).startsWith('2026-10')
     );
-    const filtered = hasOctober
-      ? clean.filter(item => 
-          !(item?.dateStr || '').toLowerCase().includes('agustus') && !normalizeDateKey(item?.dateStr || '').startsWith('2026-08')
-        )
+    const filtered = (isOctoberActive || hasOctober)
+      ? clean.filter(item => {
+          const dKey = normalizeDateKey(item?.dateStr || '', 10, 2026);
+          const isAug = (item?.dateStr || '').toLowerCase().includes('agustus') || dKey.startsWith('2026-08');
+          const isSep = (item?.dateStr || '').toLowerCase().includes('september') || dKey.startsWith('2026-09');
+          return !isAug && !isSep;
+        })
       : clean;
-    return sortRosterChronologically(filtered);
+    const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
+    const alignedFiltered = (isOctoberActive || hasOctober) ? alignOctoberRosterToPattern(filtered) : filtered;
+    const toUse = (alignedFiltered.length === 0 && !isCleared) ? INITIAL_SECURITY_ROSTER : alignedFiltered;
+    return sortRosterChronologically(toUse);
   });
 
   const [scholarships, setScholarships] = useState<ScholarshipInfo[]>(() => {
@@ -293,36 +305,49 @@ export default function App() {
       'security_roster', 
       INITIAL_SECURITY_ROSTER, 
       (data) => {
-        // If administrator has uploaded custom Excel file, keep it as authoritative
+        // Check for local custom Excel upload if cloud has incomplete or fewer entries
         const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
+        let candidate = data;
         if (isCustomUploaded) {
           const localStr = localStorage.getItem('melayu_security_roster');
           if (localStr) {
             try {
               const localRoster = JSON.parse(localStr);
               if (Array.isArray(localRoster) && localRoster.length > 0) {
-                setSecurityRoster(localRoster);
-                return;
+                candidate = localRoster;
               }
             } catch (e) {}
           }
         }
 
-        if (Array.isArray(data) && data.length > 0) {
-          const cleanData = deduplicateRoster(data);
+        if (Array.isArray(candidate) && candidate.length > 0) {
+          const cleanData = deduplicateRoster(candidate);
           
-          // Purge any rogue August items when October schedule is active
+          // Purge any rogue August or September items when October schedule is active
+          let storedTitle = localStorage.getItem('melayu_security_doc_title') || '';
+          if (!storedTitle || storedTitle.toUpperCase().includes('SEPTEMBER')) {
+            storedTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
+            localStorage.setItem('melayu_security_doc_title', storedTitle);
+          }
+          const isOctoberActive = storedTitle.toUpperCase().includes('OKTOBER');
           const hasOctober = cleanData.some(item => 
-            (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '').startsWith('2026-10')
+            (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '', 10, 2026).startsWith('2026-10')
           );
-          const filtered = hasOctober
-            ? cleanData.filter(item => 
-                !(item?.dateStr || '').toLowerCase().includes('agustus') && !normalizeDateKey(item?.dateStr || '').startsWith('2026-08')
-              )
+          const filtered = (isOctoberActive || hasOctober)
+            ? cleanData.filter(item => {
+                const dKey = normalizeDateKey(item?.dateStr || '', 10, 2026);
+                const isAug = (item?.dateStr || '').toLowerCase().includes('agustus') || dKey.startsWith('2026-08');
+                const isSep = (item?.dateStr || '').toLowerCase().includes('september') || dKey.startsWith('2026-09');
+                return !isAug && !isSep;
+              })
             : cleanData;
 
+          const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
+          const alignedFiltered = (isOctoberActive || hasOctober) ? alignOctoberRosterToPattern(filtered) : filtered;
+          const toUse = (alignedFiltered.length === 0 && !isCleared) ? INITIAL_SECURITY_ROSTER : alignedFiltered;
+
           // Sort strictly chronologically by Hari, Tanggal, dan Jam!
-          const sorted = sortRosterChronologically(filtered);
+          const sorted = sortRosterChronologically(toUse);
           setSecurityRoster(sorted);
         }
       }

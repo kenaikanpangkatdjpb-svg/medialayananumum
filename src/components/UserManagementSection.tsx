@@ -220,7 +220,9 @@ export default function UserManagementSection({
       return;
     }
     const targetId = deletingUser.id;
-    setUsers(users.filter(u => u.id !== targetId));
+    const remaining = users.filter(u => u.id !== targetId);
+    setUsers(remaining);
+    safeLocalStorageSet('melayu_users', JSON.stringify(remaining));
     deleteUserFromFirestore(targetId).catch(err => console.error('Error deleting user from Firestore:', err));
     setDeletingUser(null);
     setShowModal(false);
@@ -1018,7 +1020,10 @@ export default function UserManagementSection({
                 {editingUser ? (
                   <button
                     type="button"
-                    onClick={() => handleOpenDeleteUser(editingUser)}
+                    onClick={() => {
+                      setShowModal(false);
+                      handleOpenDeleteUser(editingUser);
+                    }}
                     className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center space-x-1"
                   >
                     <Trash2 className="w-3.5 h-3.5" />

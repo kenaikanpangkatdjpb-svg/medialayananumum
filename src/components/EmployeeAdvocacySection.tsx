@@ -55,12 +55,13 @@ export default function EmployeeAdvocacySection({
   });
   const [selectedEdition, setSelectedEdition] = useState<string>('EA 11');
 
-  // Main Records State (automatically purged of filter metadata rows & ensures EA 11 seeded)
+  // Main Records State (automatically purged of filter metadata rows & ensures EA 11 seeded if not explicitly cleared)
   const [records, setRecords] = useState<EmployeeAdvocacyItem[]>(() => {
     const stored = safeLocalStorageGet<EmployeeAdvocacyItem[]>('melayu_ea_records', INITIAL_EMPLOYEE_ADVOCACY);
     const cleaned = sanitizeEmployeeRecords(stored).clean;
+    const isEA11Cleared = safeLocalStorageGet<string>('melayu_ea_ea_11_cleared', 'false') === 'true';
     const hasEA11 = cleaned.some(r => (r.edition || '').toUpperCase() === 'EA 11');
-    if (!hasEA11) {
+    if (!hasEA11 && !isEA11Cleared) {
       const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
       return [...cleaned, ...ea11Seed];
     }
@@ -99,8 +100,9 @@ export default function EmployeeAdvocacySection({
       (firestoreData) => {
         if (firestoreData && firestoreData.length > 0) {
           const { clean, removed } = sanitizeEmployeeRecords(firestoreData);
+          const isEA11Cleared = safeLocalStorageGet<string>('melayu_ea_ea_11_cleared', 'false') === 'true';
           const hasEA11 = clean.some(r => (r.edition || '').toUpperCase() === 'EA 11');
-          if (!hasEA11) {
+          if (!hasEA11 && !isEA11Cleared) {
             const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
             const merged = [...clean, ...ea11Seed];
             setRecords(merged);
@@ -315,6 +317,7 @@ export default function EmployeeAdvocacySection({
       action: () => {
         const updated = records.filter(r => r.id !== item.id);
         setRecords(updated);
+        safeLocalStorageSet('melayu_ea_records', JSON.stringify(updated));
         setSelectedIds(prev => prev.filter(id => id !== item.id));
         deleteFirestoreDoc('employee_advocacy', item.id);
         setConfirmModal(prev => ({ ...prev, show: false }));
@@ -342,6 +345,7 @@ export default function EmployeeAdvocacySection({
         const idsToDelete = new Set(selectedIds);
         const updated = records.filter(r => !idsToDelete.has(r.id));
         setRecords(updated);
+        safeLocalStorageSet('melayu_ea_records', JSON.stringify(updated));
         
         selectedIds.forEach(id => {
           deleteFirestoreDoc('employee_advocacy', id);
@@ -372,6 +376,8 @@ export default function EmployeeAdvocacySection({
         const idsToDelete = currentEditionRecords.map(r => r.id);
         const otherEditions = records.filter(r => (r.edition || 'EA 08') !== selectedEdition);
         setRecords(otherEditions);
+        safeLocalStorageSet('melayu_ea_records', JSON.stringify(otherEditions));
+        safeLocalStorageSet(`melayu_ea_${selectedEdition.replace(/\s+/g, '_').toLowerCase()}_cleared`, 'true');
 
         idsToDelete.forEach(id => {
           deleteFirestoreDoc('employee_advocacy', id);
@@ -401,10 +407,12 @@ export default function EmployeeAdvocacySection({
       action: () => {
         const newEditions = editions.filter(ed => ed !== targetEd);
         setEditions(newEditions);
+        safeLocalStorageSet('melayu_ea_editions', JSON.stringify(newEditions));
 
         const itemsToDelete = records.filter(r => (r.edition || 'EA 08') === targetEd);
         const remainingRecords = records.filter(r => (r.edition || 'EA 08') !== targetEd);
         setRecords(remainingRecords);
+        safeLocalStorageSet('melayu_ea_records', JSON.stringify(remainingRecords));
 
         itemsToDelete.forEach(item => {
           deleteFirestoreDoc('employee_advocacy', item.id);
@@ -477,6 +485,8 @@ export default function EmployeeAdvocacySection({
 
         const resetList = [...resetItems, ...otherEditions];
         setRecords(resetList);
+        safeLocalStorageSet('melayu_ea_records', JSON.stringify(resetList));
+        localStorage.removeItem(`melayu_ea_${selectedEdition.replace(/\s+/g, '_').toLowerCase()}_cleared`);
         resetItems.forEach(item => saveFirestoreDoc('employee_advocacy', item));
         setSelectedIds([]);
         setConfirmModal(prev => ({ ...prev, show: false }));
