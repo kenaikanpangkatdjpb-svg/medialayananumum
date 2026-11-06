@@ -95,7 +95,7 @@ export default function App() {
   // Edit Mode State
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
 
-  const KPPN_ALLOWED_TABS = ['monitoring-kinerja', 'monitoring-abk', 'monitoring-dams', 'cek-seribu', 'monitoring-ea'];
+  const KPPN_ALLOWED_TABS = ['selamat-datang', 'monitoring-kinerja', 'monitoring-abk', 'monitoring-dams', 'cek-seribu', 'monitoring-ea'];
 
   // Sync user state to session storage and guard Edit Mode and KPPN allowed tabs
   useEffect(() => {
@@ -110,8 +110,8 @@ export default function App() {
         setIsEditMode(false);
       }
       if (currentUser.role === 'kppn' && !KPPN_ALLOWED_TABS.includes(activeTab)) {
-        setActiveTab('monitoring-kinerja');
-        safeSessionStorageSet('melayu_active_tab', 'monitoring-kinerja');
+        setActiveTab('selamat-datang');
+        safeSessionStorageSet('melayu_active_tab', 'selamat-datang');
       }
     } else {
       safeSessionStorageRemove('melayu_current_user');
@@ -144,7 +144,7 @@ export default function App() {
 
   const handleLoginSuccess = (user: CurrentUser) => {
     setCurrentUser(user);
-    const initialTab = user.role === 'kppn' ? 'monitoring-kinerja' : 'selamat-datang';
+    const initialTab = 'selamat-datang';
     setActiveTab(initialTab);
     safeSessionStorageSet('melayu_active_tab', initialTab);
   };

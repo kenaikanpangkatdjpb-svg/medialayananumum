@@ -317,6 +317,42 @@ export default function WelcomeView({
     }
   ];
 
+  if (currentUser?.role === 'kppn') {
+    return (
+      <div className="p-4 md:p-6 space-y-6" id="welcome-view-kppn">
+        {/* 1. Real-time Status Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-white border border-slate-200/80 rounded-xl p-3 px-4 shadow-xs text-xs text-slate-600 gap-2">
+          <div className="flex items-center space-x-2">
+            <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+            <span className="font-semibold text-slate-800">Status Operasional Layanan:</span>
+            <span className="text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full font-mono font-bold text-[10px] border border-emerald-200">Normal (Online)</span>
+          </div>
+          <div className="flex items-center space-x-3 text-[11px] font-mono text-slate-500">
+            <Clock className="w-3.5 h-3.5 text-indigo-600" />
+            <span>{nowTime.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+            <span className="font-bold text-slate-800">{nowTime.toLocaleTimeString('id-ID')} WIB</span>
+          </div>
+        </div>
+
+        {/* 2. Jadwal Manajemen Kinerja Triwulan III 2026 */}
+        <JadwalManajemenKinerjaCard />
+
+        {/* 3. Real-time Timestamp Footer */}
+        <div 
+          className="text-[10px] text-slate-400 flex flex-col sm:flex-row items-center justify-between border-t border-slate-200 pt-4"
+          id="looker-studio-footer-kppn"
+        >
+          <span>Data Terakhir Diperbarui: {nowTime.toLocaleDateString('id-ID')} {nowTime.toLocaleTimeString('id-ID')}</span>
+          <div className="flex items-center space-x-2 mt-1 sm:mt-0">
+            <a href="#" className="hover:underline">Kebijakan Privasi Kemenkeu</a>
+            <span>|</span>
+            <span>Kanwil DJPb Provinsi Riau © 2026</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 md:p-6 space-y-6" id="welcome-view-main">
       {/* 1. Real-time Status Header */}

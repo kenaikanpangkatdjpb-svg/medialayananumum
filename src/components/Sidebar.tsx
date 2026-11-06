@@ -279,43 +279,41 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Dashboard Melayu (Selamat Datang) Card - Hidden for KPPN */}
-        {currentUser?.role !== 'kppn' && (
-          <div className={isMini ? 'mb-2 flex justify-center' : 'mb-4'} id="sidebar-welcome-button-container">
-            <button
-              id="btn-nav-selamat-datang"
-              onClick={() => handleItemClick('selamat-datang')}
-              title="DASHBOARD MELAYU"
-              className={`transition-all cursor-pointer ${
-                isMini
-                  ? `p-2.5 rounded-xl border flex items-center justify-center ${
-                      isWelcomeSelected
-                        ? 'bg-djpb-blue text-white border-djpb-blue shadow-md'
-                        : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-xs'
-                    }`
-                  : `w-full flex items-center justify-between p-3.5 rounded-xl border ${
-                      isWelcomeSelected
-                        ? 'bg-white border-djpb-blue text-djpb-blue ring-3 ring-djpb-blue/5 shadow-md font-bold'
-                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 shadow-xs'
-                    }`
-              }`}
-            >
-              {isMini ? (
-                <LayoutDashboard className={`w-5 h-5 ${isWelcomeSelected ? 'text-white' : 'text-slate-700'}`} />
-              ) : (
-                <>
-                  <div className="flex items-center space-x-3.5 min-w-0">
-                    <LayoutDashboard className={`w-5 h-5 shrink-0 ${isWelcomeSelected ? 'text-djpb-blue' : 'text-slate-700'}`} />
-                    <span className="text-xs font-bold uppercase tracking-wider font-sans truncate">
-                      DASHBOARD MELAYU
-                    </span>
-                  </div>
-                  <MoreVertical className="w-4 h-4 text-slate-400 shrink-0" />
-                </>
-              )}
-            </button>
-          </div>
-        )}
+        {/* Dashboard Melayu (Selamat Datang) Card */}
+        <div className={isMini ? 'mb-2 flex justify-center' : 'mb-4'} id="sidebar-welcome-button-container">
+          <button
+            id="btn-nav-selamat-datang"
+            onClick={() => handleItemClick('selamat-datang')}
+            title="DASHBOARD MELAYU"
+            className={`transition-all cursor-pointer ${
+              isMini
+                ? `p-2.5 rounded-xl border flex items-center justify-center ${
+                    isWelcomeSelected
+                      ? 'bg-djpb-blue text-white border-djpb-blue shadow-md'
+                      : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-xs'
+                  }`
+                : `w-full flex items-center justify-between p-3.5 rounded-xl border ${
+                    isWelcomeSelected
+                      ? 'bg-white border-djpb-blue text-djpb-blue ring-3 ring-djpb-blue/5 shadow-md font-bold'
+                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 shadow-xs'
+                  }`
+            }`}
+          >
+            {isMini ? (
+              <LayoutDashboard className={`w-5 h-5 ${isWelcomeSelected ? 'text-white' : 'text-slate-700'}`} />
+            ) : (
+              <>
+                <div className="flex items-center space-x-3.5 min-w-0">
+                  <LayoutDashboard className={`w-5 h-5 shrink-0 ${isWelcomeSelected ? 'text-djpb-blue' : 'text-slate-700'}`} />
+                  <span className="text-xs font-bold uppercase tracking-wider font-sans truncate">
+                    DASHBOARD MELAYU
+                  </span>
+                </div>
+                <MoreVertical className="w-4 h-4 text-slate-400 shrink-0" />
+              </>
+            )}
+          </button>
+        </div>
 
         {/* Sections List */}
         <nav className="space-y-6 flex-1" id="sidebar-nav-list">
