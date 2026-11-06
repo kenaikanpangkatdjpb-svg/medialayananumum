@@ -33,9 +33,9 @@ function JadwalManajemenKinerjaCard() {
       <div className="bg-slate-200/90 text-slate-800 px-5 py-2.5 font-display font-extrabold text-xs tracking-wider uppercase border-b border-slate-300/80 flex items-center justify-between">
         <div className="flex items-center space-x-2">
           <Calendar className="w-4 h-4 text-djpb-blue" />
-          <span>Jadwal Manajemen Kinerja</span>
+          <span>Jadwal Manajemen dan Evaluasi Kinerja</span>
         </div>
-        <span className="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded font-mono font-bold">Triwulan III Tahun 2026</span>
+        <span className="text-[10px] bg-slate-300 text-slate-700 px-2 py-0.5 rounded font-mono font-bold">Triwulan III 2026</span>
       </div>
 
       <div className="p-5 md:p-6 space-y-4">
@@ -43,7 +43,7 @@ function JadwalManajemenKinerjaCard() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between border-b border-blue-100 pb-4 gap-3">
           <div>
             <div className="flex items-center space-x-2 text-djpb-blue font-extrabold text-lg md:text-xl font-display">
-              <span>Pelaksanaan Manajemen Kinerja Organisasi Triwulan III Tahun 2026</span>
+              <span>Manajemen dan Evaluasi Kinerja Triwulan III 2026</span>
             </div>
             <p className="text-amber-600 font-bold text-xs md:text-sm font-display mt-0.5">
               Kanwil DJPb Provinsi Riau
@@ -61,7 +61,6 @@ function JadwalManajemenKinerjaCard() {
               <span>Spreadsheet Subbagian Penilaian Kinerja</span>
               <ExternalLink className="w-3 h-3" />
             </a>
-
           </div>
         </div>
 
@@ -71,103 +70,254 @@ function JadwalManajemenKinerjaCard() {
             <thead>
               <tr className="bg-[#2B5282] text-white font-bold text-[11px] uppercase tracking-wider">
                 <th className="py-2.5 px-3 w-12 text-center border-r border-blue-800">No.</th>
-                <th className="py-2.5 px-4 border-r border-blue-800">Kegiatan / Agenda Pelaksanaan Kinerja Organisasi</th>
-                <th className="py-2.5 px-4 w-72 md:w-80">Batas Waktu Pelaksanaan</th>
+                <th className="py-2.5 px-4 border-r border-blue-800 min-w-[200px]">Kegiatan</th>
+                <th className="py-2.5 px-4 border-r border-blue-800 min-w-[150px]">Aplikasi</th>
+                <th className="py-2.5 px-4 border-r border-blue-800 min-w-[150px]">Pihak Pelaksana</th>
+                <th className="py-2.5 px-4 min-w-[220px]">Jadwal Pelaksanaan</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 text-slate-800 font-sans text-[11px]">
               {/* 1 */}
               <tr className="hover:bg-blue-50/40 transition-colors">
-                <td className="py-3.5 px-3 text-center font-bold text-slate-500 font-mono align-top pt-3.5">1</td>
-                <td className="py-3.5 px-4 space-y-1.5 border-r border-slate-100">
-                  <div className="font-bold text-slate-900 text-xs md:text-sm">
-                    Perekaman Realisasi IKI dan HKT
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                      Satu Kemenkeu &bull; IPR
-                    </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                      Indikator Kinerja Individu & Hasil Kerja Tim
-                    </span>
-                  </div>
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">1</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Pengajuan Evaluator
                 </td>
-                <td className="py-3.5 px-4 align-top pt-3.5">
-                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs">
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
                     <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span className="font-bold font-mono text-xs">Paling lambat 9 November 2026</span>
+                    <span>30 September s.d. 6 Oktober 2026</span>
                   </div>
                 </td>
               </tr>
 
               {/* 2 */}
               <tr className="bg-slate-50/50 hover:bg-blue-50/40 transition-colors">
-                <td className="py-3.5 px-3 text-center font-bold text-slate-500 font-mono align-top pt-3.5">2</td>
-                <td className="py-3.5 px-4 space-y-1.5 border-r border-slate-100">
-                  <div className="font-bold text-slate-900 text-xs md:text-sm">
-                    Validasi Realisasi IKI oleh Atsung
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                      Atasan Langsung (Atsung)
-                    </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                      Verifikasi & Persetujuan Capaian
-                    </span>
-                  </div>
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">2</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Penetapan Evaluator
                 </td>
-                <td className="py-3.5 px-4 align-top pt-3.5">
-                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs">
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
                     <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span className="font-bold font-mono text-xs">Paling lambat 16 November 2026</span>
+                    <span>30 September s.d. 9 Oktober 2026</span>
                   </div>
                 </td>
               </tr>
 
               {/* 3 */}
               <tr className="hover:bg-blue-50/40 transition-colors">
-                <td className="py-3.5 px-3 text-center font-bold text-slate-500 font-mono align-top pt-3.5">3</td>
-                <td className="py-3.5 px-4 space-y-1.5 border-r border-slate-100">
-                  <div className="font-bold text-slate-900 text-xs md:text-sm">
-                    Penetapan DEK & HEK Triwulan II 2026
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      Triwulan II 2026
-                    </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                      Dialog Evaluasi Kinerja (DEK) &amp; Hasil Evaluasi Kinerja (HEK)
-                    </span>
-                  </div>
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">3</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Penilaian Perilaku Kerja
                 </td>
-                <td className="py-3.5 px-4 align-top pt-3.5">
-                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs">
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
                     <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                    <span className="font-bold font-mono text-xs">Paling lambat 10 Desember 2026</span>
+                    <span>30 September s.d. 16 Oktober 2026</span>
                   </div>
                 </td>
               </tr>
 
               {/* 4 */}
               <tr className="bg-slate-50/50 hover:bg-blue-50/40 transition-colors">
-                <td className="py-3.5 px-3 text-center font-bold text-slate-500 font-mono align-top pt-3.5">4</td>
-                <td className="py-3.5 px-4 space-y-1.5 border-r border-slate-100">
-                  <div className="font-bold text-slate-900 text-xs md:text-sm">
-                    Penetapan DEK & HEK Triwulan III 2026
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">4</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Rekam realisasi IKU/IKI Organisasi
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <div className="flex flex-wrap gap-1">
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                      Triwulan III 2026
+                      Satu Kemenkeu
                     </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                      Dialog Evaluasi Kinerja (DEK) &amp; Hasil Evaluasi Kinerja (HEK)
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Intense
                     </span>
                   </div>
                 </td>
-                <td className="py-3.5 px-4 align-top pt-3.5">
-                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-blue-50 text-blue-900 border border-blue-300 rounded-lg shadow-2xs">
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                    Pengelola Kinerja
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>Paling lambat 14 Oktober 2026</span>
+                  </div>
+                </td>
+              </tr>
+
+              {/* 5 */}
+              <tr className="hover:bg-blue-50/40 transition-colors">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">5</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Reviu K3
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                    Pengelola Kinerja
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>26 Oktober 2026</span>
+                  </div>
+                </td>
+              </tr>
+
+              {/* 6 */}
+              <tr className="bg-slate-50/50 hover:bg-blue-50/40 transition-colors">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">6</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Rekam realisasi IKU/IKI Pegawai
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>26 Oktober s.d. 9 November 2026</span>
+                  </div>
+                </td>
+              </tr>
+
+              {/* 7 */}
+              <tr className="hover:bg-blue-50/40 transition-colors">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">7</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Validasi realisasi IKI
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    Pejabat Penilai Kinerja
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>10 s.d. 16 November 2026</span>
+                  </div>
+                </td>
+              </tr>
+
+              {/* 8 */}
+              <tr className="bg-slate-50/50 hover:bg-blue-50/40 transition-colors">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">8</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Penetapan HEK-DEK Triwulan II
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>paling lambat 10 Desember 2026</span>
+                  </div>
+                </td>
+              </tr>
+
+              {/* 9 */}
+              <tr className="hover:bg-blue-50/40 transition-colors">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">9</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Penetapan HEK-DEK Triwulan III
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    Satu Kemenkeu
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-blue-50 text-blue-900 border border-blue-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
                     <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                    <span className="font-bold font-mono text-xs">Dimulai 11 Desember 2026</span>
+                    <span>Dimulai 11 Desember 2026</span>
+                  </div>
+                </td>
+              </tr>
+
+              {/* 10 */}
+              <tr className="bg-slate-50/50 hover:bg-blue-50/40 transition-colors">
+                <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono align-middle">10</td>
+                <td className="py-3 px-4 font-bold text-slate-900 border-r border-slate-100">
+                  Unggah dokumen kinerja
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    Intense DJPb
+                  </span>
+                </td>
+                <td className="py-3 px-4 border-r border-slate-100">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                    Seluruh pegawai
+                  </span>
+                </td>
+                <td className="py-3 px-4">
+                  <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-300 rounded-lg shadow-2xs font-bold font-mono text-xs">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>s.d. 30 Oktober 2026</span>
                   </div>
                 </td>
               </tr>
@@ -175,36 +325,25 @@ function JadwalManajemenKinerjaCard() {
           </table>
         </div>
 
-        {/* Catatan Box */}
+        {/* Keterangan Box */}
         <div className="bg-amber-50/90 border border-amber-200/90 rounded-xl p-3.5 text-xs text-amber-950 space-y-2 shadow-2xs">
           <div className="flex items-center space-x-2 font-display font-extrabold text-amber-900 text-xs">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span className="uppercase tracking-wider">Catatan:</span>
+            <span className="uppercase tracking-wider">Keterangan:</span>
           </div>
-          <div className="text-slate-800 leading-relaxed text-[11px] sm:text-xs pl-6">
+          <div className="text-slate-800 leading-relaxed text-[11px] sm:text-xs pl-6 space-y-1.5">
             <p className="font-medium">
-              Perekaman realisasi IKI pada aplikasi{' '}
-              <span className="inline-flex items-center flex-wrap gap-1 font-bold text-djpb-blue bg-white px-2 py-0.5 rounded border border-amber-200 mx-1 shadow-2xs">
-                <span>Satu Kemenkeu</span>
-                <span className="text-slate-400">&rarr;</span>
-                <span>Performa</span>
-                <span className="text-slate-400">&rarr;</span>
-                <span>Kinerja</span>
-                <span className="text-slate-400">&rarr;</span>
-                <span>IPR</span>
-                <span className="text-slate-400">&rarr;</span>
-                <span className="text-emerald-700 font-extrabold">Pilih bulan SEPTEMBER</span>
-                <span className="text-slate-400">&rarr;</span>
-                <span className="text-amber-800 font-extrabold">Isi realisasi per IKI</span>
-              </span>{' '}
-              agar dilakukan pada kesempatan pertama sebelum batas waktu.
+              <span className="font-bold text-amber-900">1)</span> Realisasi IKI/IKU yang realisasinya dihitung/diperoleh sendiri: Apabila realisasi belum bisa didapatkan maka menggunakan proyeksi.
+            </p>
+            <p className="font-medium">
+              <span className="font-bold text-amber-900">2)</span> Realisasi IKI/IKU dari Kantor Pusat: Apabila realisasi belum tersedia maka dapat menggunakan realisasi IKU/IKI triwulan sebelumnya. Dengan catatan apabila realisasi IKU/IKI sudah tersedia, maka pegawai segera melakukan update realisasi pada Satu Kemenkeu.
             </p>
           </div>
         </div>
 
         <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
-          <span className="font-medium text-slate-600">Total 4 Agenda Pelaksanaan Kinerja Organisasi TW III</span>
-          <span className="font-mono text-slate-500">1 - 4 / 4</span>
+          <span className="font-medium text-slate-600">Total 10 Kegiatan Manajemen dan Evaluasi Kinerja TW III</span>
+          <span className="font-mono text-slate-500">1 - 10 / 10</span>
         </div>
       </div>
     </div>

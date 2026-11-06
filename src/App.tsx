@@ -213,8 +213,10 @@ export default function App() {
       storedTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
       localStorage.setItem('melayu_security_doc_title', storedTitle);
     }
-    const isOctoberActive = storedTitle.toUpperCase().includes('OKTOBER');
-    const hasOctober = clean.some(item => 
+    const titleUp = storedTitle.toUpperCase();
+    const isNovemberActive = titleUp.includes('NOVEMBER') || titleUp.includes('NOPEMBER');
+    const isOctoberActive = !isNovemberActive && titleUp.includes('OKTOBER');
+    const hasOctober = !isNovemberActive && clean.some(item => 
       (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '', 10, 2026).startsWith('2026-10')
     );
     const filtered = (isOctoberActive || hasOctober)
@@ -329,8 +331,10 @@ export default function App() {
             storedTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
             localStorage.setItem('melayu_security_doc_title', storedTitle);
           }
-          const isOctoberActive = storedTitle.toUpperCase().includes('OKTOBER');
-          const hasOctober = cleanData.some(item => 
+          const titleUp = storedTitle.toUpperCase();
+          const isNovemberActive = titleUp.includes('NOVEMBER') || titleUp.includes('NOPEMBER');
+          const isOctoberActive = !isNovemberActive && titleUp.includes('OKTOBER');
+          const hasOctober = !isNovemberActive && cleanData.some(item => 
             (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '', 10, 2026).startsWith('2026-10')
           );
           const filtered = (isOctoberActive || hasOctober)

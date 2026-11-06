@@ -697,7 +697,15 @@ export function deduplicateRoster(roster: SecurityRosterItem[], contextMonth?: n
       }
     }
   }
-  effMonth = effMonth || 10;
+  if (!effMonth) {
+    const savedTitle = (typeof localStorage !== 'undefined' && localStorage.getItem('melayu_security_doc_title')) || '';
+    const mInfo = extractMonthAndYearFromText(savedTitle);
+    if (mInfo) {
+      effMonth = mInfo.month;
+      effYear = mInfo.year;
+    }
+  }
+  effMonth = effMonth || 11;
   effYear = effYear || 2026;
 
   const seenKeys = new Set<string>();
@@ -839,6 +847,17 @@ export default function SecurityGuardSection({
     return () => unsubConfig();
   }, []);
 
+  // Sync print and delete target months whenever document title changes
+  useEffect(() => {
+    const mInfo = extractMonthAndYearFromText(docTitle);
+    if (mInfo) {
+      setPrintMonth(mInfo.month);
+      setPrintYear(mInfo.year);
+      setDeleteTargetMonth(mInfo.month);
+      setDeleteTargetYear(mInfo.year);
+    }
+  }, [docTitle]);
+
   // Filter states
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<string>('ALL');
@@ -926,9 +945,13 @@ export default function SecurityGuardSection({
   // Auto-clean any true duplicate entries or stray September/August entries reactively
   useEffect(() => {
     if (!setSecurityRoster || !securityRoster || securityRoster.length === 0) return;
-    const isOctoberActive = docTitle.toUpperCase().includes('OKTOBER');
+    const titleUpper = (docTitle || '').toUpperCase();
+    const isNovemberActive = titleUpper.includes('NOVEMBER') || titleUpper.includes('NOPEMBER') || titleUpper.includes('NOV');
+    const isOctoberActive = !isNovemberActive && titleUpper.includes('OKTOBER');
 
-    const hasWrongMonthItems = isOctoberActive && securityRoster.some(it => {
+    if (!isOctoberActive) return;
+
+    const hasWrongMonthItems = securityRoster.some(it => {
       const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
       return (
         dKey.startsWith('2026-09') || (it.dateStr || '').toLowerCase().includes('september') ||
@@ -937,7 +960,7 @@ export default function SecurityGuardSection({
     });
 
     // Check if any day in October has only 1 guard on morning shift 06.00/18.00
-    const hasSingleGuardMornings = isOctoberActive && securityRoster.some(it => {
+    const hasSingleGuardMornings = securityRoster.some(it => {
       const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
       return dKey.startsWith('2026-10');
     }) && (() => {
@@ -959,14 +982,12 @@ export default function SecurityGuardSection({
 
     if (duplicateCount > 0 || hasWrongMonthItems || hasSingleGuardMornings) {
       const cleaned = deduplicateRoster(securityRoster);
-      const filteredForMonth = isOctoberActive
-        ? alignOctoberRosterToPattern(cleaned.filter(it => {
-            const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
-            const isSep = dKey.startsWith('2026-09') || (it.dateStr || '').toLowerCase().includes('september');
-            const isAug = dKey.startsWith('2026-08') || (it.dateStr || '').toLowerCase().includes('agustus');
-            return !isSep && !isAug;
-          }))
-        : cleaned;
+      const filteredForMonth = alignOctoberRosterToPattern(cleaned.filter(it => {
+        const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
+        const isSep = dKey.startsWith('2026-09') || (it.dateStr || '').toLowerCase().includes('september');
+        const isAug = dKey.startsWith('2026-08') || (it.dateStr || '').toLowerCase().includes('agustus');
+        return !isSep && !isAug;
+      }));
 
       const sorted = sortRosterChronologically(filteredForMonth);
       const isDifferent = sorted.length !== securityRoster.length ||
@@ -1007,7 +1028,10 @@ export default function SecurityGuardSection({
   const handleCleanDuplicates = () => {
     if (!setSecurityRoster) return;
     const originalCount = (securityRoster || []).length;
-    const cleaned = alignOctoberRosterToPattern(deduplicateRoster(securityRoster || []));
+    const isOctoberActive = docTitle.toUpperCase().includes('OKTOBER') && !docTitle.toUpperCase().includes('NOVEMBER');
+    const cleaned = isOctoberActive
+      ? alignOctoberRosterToPattern(deduplicateRoster(securityRoster || []))
+      : deduplicateRoster(securityRoster || []);
     const sorted = sortRosterChronologically(cleaned);
     const removed = originalCount - cleaned.length;
     setSecurityRoster(sorted);
@@ -1017,7 +1041,7 @@ export default function SecurityGuardSection({
     if (removed > 0) {
       setSuccessNotice(`BERHASIL DIBERSIHKAN! Sebanyak ${removed} data diselaraskan dan duplikasi dibersihkan.`);
     } else {
-      setSuccessNotice(`Data roster pengawasan penjagaan keamanan sudah bersih, rapi, dan sesuai standar 2 petugas shift pagi.`);
+      setSuccessNotice(`Data roster pengawasan penjagaan keamanan sudah bersih dan rapi.`);
     }
     setTimeout(() => setSuccessNotice(''), 6000);
   };
@@ -1040,19 +1064,28 @@ export default function SecurityGuardSection({
 
     const deduplicated = deduplicateRoster(list).filter(item => !deletedIdsSet.has(item.id));
     
-    // Check if there is October data
-    const hasOctoberData = deduplicated.some(item => {
+    // Determine active month
+    const titleUpper = (docTitle || '').toUpperCase();
+    const hasNovemberData = deduplicated.some(item => {
+      const dKey = normalizeDateKey(item.dateStr || '');
+      return dKey.startsWith('2026-11') || (item.dateStr || '').toLowerCase().includes('november') || (item.dateStr || '').toLowerCase().includes('nopember');
+    });
+    const isNovemberActive = titleUpper.includes('NOVEMBER') || titleUpper.includes('NOPEMBER') || hasNovemberData;
+
+    const hasOctoberData = !isNovemberActive && deduplicated.some(item => {
       const dKey = normalizeDateKey(item.dateStr || '');
       return dKey.startsWith('2026-10') || (item.dateStr || '').toLowerCase().includes('oktober');
     });
 
-    const isOctoberDoc = !docTitle || docTitle.toUpperCase().includes('OKTOBER') || docTitle.toUpperCase().includes('SEPTEMBER');
+    const isOctoberActive = !isNovemberActive && titleUpper.includes('OKTOBER');
     const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
     const isUserModified = localStorage.getItem('melayu_security_roster_user_modified') === 'true';
 
     let filteredList: SecurityRosterItem[] = deduplicated;
 
-    if (isOctoberDoc || hasOctoberData || isCustomUploaded) {
+    if (isNovemberActive) {
+      filteredList = deduplicated;
+    } else if (isOctoberActive || hasOctoberData) {
       // Strictly isolate October items: purge any rogue September or August records from October roster
       const octoberOnly = deduplicated.filter(item => {
         if (!item) return false;
@@ -1406,10 +1439,17 @@ export default function SecurityGuardSection({
       let headerRowIdx = -1;
       let bestScore = 0;
 
-      // Scan first 15 rows for header row and title
+      // Scan first 15 rows for header row, month info, and title
       for (let r = 0; r < Math.min(rawRows.length, 15); r++) {
         const rowArr = rawRows[r] || [];
         const rowStr = rowArr.map(c => String(c || '').trim()).join(' ').toUpperCase();
+
+        const contentMonthInfo = extractMonthAndYearFromText(rowStr);
+        if (contentMonthInfo && contentMonthInfo.month !== targetMonth) {
+          targetMonth = contentMonthInfo.month;
+          targetYear = contentMonthInfo.year;
+          detectedTitle = `JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ${ID_MONTHS_TITLE[targetMonth - 1].toUpperCase()} ${targetYear}`;
+        }
 
         if ((rowStr.includes('JADWAL') || rowStr.includes('PENGAWASAN') || rowStr.includes('PENJAGAAN') || rowStr.includes('SATPAM') || rowStr.includes('KEAMANAN')) && !rowStr.includes('LOKASI') && !rowStr.includes('HADIR')) {
           const nonNullCells = rowArr.map(c => String(c || '').trim()).filter(Boolean);
@@ -1816,7 +1856,7 @@ export default function SecurityGuardSection({
             formattedDate = `${ID_DAYS_UPPER[dObj.getDay()]}/ 1 ${ID_MONTHS_TITLE[targetMonth - 1]} ${targetYear}`;
           }
 
-          // Skip rows belonging to other months (e.g. September rows in an October sheet)
+          // Skip rows belonging to other months
           const dateMonthInfo = extractMonthAndYearFromText(formattedDate);
           if (targetMonth === 10 && dateMonthInfo && dateMonthInfo.month !== 10) {
             continue;
@@ -1974,7 +2014,7 @@ export default function SecurityGuardSection({
     }
   };
 
-  // Handle Excel File Upload with Intelligent Column Detection & Chronological Ordering
+  // Handle Excel File Upload with Intelligent Month & Column Detection & Chronological Ordering
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1993,35 +2033,51 @@ export default function SecurityGuardSection({
         setUploadedWorkbook(wb);
         setAvailableSheets(sheetNames);
 
-        // Intelligently select best sheet, prioritizing October
+        // Detect month & year from filename first
+        const fileMonthInfo = extractMonthAndYearFromText(file.name);
+
         let bestSheetName = sheetNames[0];
-        const octSheet = sheetNames.find(s => /oktober|okt\b/i.test(s));
-        if (octSheet) {
-          bestSheetName = octSheet;
-        } else {
-          // Check if any sheet's content contains October
-          for (const sName of sheetNames) {
-            const ws = wb.Sheets[sName];
-            const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: false });
-            const hasOkt = (rows || []).slice(0, 10).some(r => (r || []).some(c => /oktober|okt\b/i.test(String(c))));
-            if (hasOkt) {
+        let detectedMonthFromSheets = -1;
+        let detectedYearFromSheets = 2026;
+
+        // Check if any sheet name contains month matching filename or any explicit month
+        for (const sName of sheetNames) {
+          const sInfo = extractMonthAndYearFromText(sName);
+          if (sInfo) {
+            if (fileMonthInfo && sInfo.month === fileMonthInfo.month) {
               bestSheetName = sName;
+              detectedMonthFromSheets = sInfo.month;
+              detectedYearFromSheets = sInfo.year;
               break;
+            } else if (detectedMonthFromSheets === -1) {
+              bestSheetName = sName;
+              detectedMonthFromSheets = sInfo.month;
+              detectedYearFromSheets = sInfo.year;
             }
           }
         }
 
-        // Default target is always Bulan Oktober 2026 for Penjagaan Keamanan
-        let targetMonth = 10;
-        let targetYear = 2026;
-        if (!/oktober|okt\b/i.test(file.name) && !/oktober|okt\b/i.test(bestSheetName)) {
-          const mInfo = extractMonthAndYearFromText(file.name) || extractMonthAndYearFromText(bestSheetName);
-          // Never let an un-updated September template filename force month 9 onto October roster
-          if (mInfo && mInfo.month !== 9) {
-            targetMonth = mInfo.month;
-            targetYear = mInfo.year;
+        // If sheet name had no month info, scan top rows of each sheet
+        if (detectedMonthFromSheets === -1) {
+          for (const sName of sheetNames) {
+            const ws = wb.Sheets[sName];
+            const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: false });
+            for (let r = 0; r < Math.min((rows || []).length, 10); r++) {
+              const rStr = ((rows || [])[r] || []).map(c => String(c || '')).join(' ');
+              const mInfo = extractMonthAndYearFromText(rStr);
+              if (mInfo) {
+                bestSheetName = sName;
+                detectedMonthFromSheets = mInfo.month;
+                detectedYearFromSheets = mInfo.year;
+                break;
+              }
+            }
+            if (detectedMonthFromSheets !== -1) break;
           }
         }
+
+        let targetMonth = fileMonthInfo?.month || (detectedMonthFromSheets !== -1 ? detectedMonthFromSheets : 11);
+        let targetYear = fileMonthInfo?.year || (detectedMonthFromSheets !== -1 ? detectedYearFromSheets : 2026);
 
         parseWorkbookSheet(wb, bestSheetName, targetMonth, targetYear, file.name);
       } catch (err) {
@@ -2104,6 +2160,10 @@ export default function SecurityGuardSection({
 
     setDocTitle(finalTitle);
     setDynamicHeaders(previewDocHeaders);
+    setPrintMonth(previewMonth);
+    setPrintYear(previewYear);
+    setDeleteTargetMonth(previewMonth);
+    setDeleteTargetYear(previewYear);
 
     // Save title, headers and data to localStorage
     safeLocalStorageSet('melayu_security_doc_title', finalTitle);
