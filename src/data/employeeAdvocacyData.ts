@@ -171,10 +171,20 @@ export const STANDARD_EA_EDITIONS = [
   'EA 08',
   'EA 09',
   'EA 10',
-  'EA 11'
+  'EA 11',
+  'EA 12',
+  'EA 13',
+  'EA 14',
+  'EA 15',
+  'EA 16'
 ];
 
 export const INITIAL_EA_EDITIONS = [
+  'EA 16',
+  'EA 15',
+  'EA 14',
+  'EA 13',
+  'EA 12',
   'EA 11',
   'EA 10',
   'EA 09',
@@ -280,16 +290,23 @@ export const EA_08_EMPLOYEES: EmployeeAdvocacyItem[] = [
   { id: 'ea-89', name: 'Yolanda Catherina Sirait A.Md.Ak.', status: 'Belum', edition: 'EA 08' }
 ];
 
-export const EA_11_EMPLOYEES: EmployeeAdvocacyItem[] = EA_08_EMPLOYEES.map((item, idx) => ({
-  id: `ea11-${idx + 1}`,
-  name: item.name,
-  status: item.status,
-  edition: 'EA 11',
-  division: item.division,
-  updatedAt: new Date().toISOString()
-}));
+export function createInitialEmployeesForEdition(edition: string): EmployeeAdvocacyItem[] {
+  const edClean = edition.replace(/\s+/g, '').toLowerCase();
+  return EA_08_EMPLOYEES.map((item, idx) => ({
+    id: `ea-${edClean}-${idx + 1}`,
+    name: item.name,
+    status: item.status,
+    edition,
+    division: item.division,
+    updatedAt: new Date().toISOString()
+  }));
+}
+
+export const EA_16_EMPLOYEES: EmployeeAdvocacyItem[] = createInitialEmployeesForEdition('EA 16');
+export const EA_11_EMPLOYEES: EmployeeAdvocacyItem[] = createInitialEmployeesForEdition('EA 11');
 
 export const INITIAL_EMPLOYEE_ADVOCACY: EmployeeAdvocacyItem[] = [
   ...EA_08_EMPLOYEES,
-  ...EA_11_EMPLOYEES
+  ...EA_11_EMPLOYEES,
+  ...EA_16_EMPLOYEES
 ];

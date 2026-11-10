@@ -12,6 +12,7 @@ import {
   INITIAL_EMPLOYEE_ADVOCACY, 
   INITIAL_EA_EDITIONS,
   STANDARD_EA_EDITIONS,
+  createInitialEmployeesForEdition,
   isValidEmployeeAdvocacyName,
   normalizeEmployeeName,
   sanitizeEmployeeRecords
@@ -45,25 +46,26 @@ export default function EmployeeAdvocacySection({
 }: EmployeeAdvocacySectionProps) {
   const isAdmin = isEditMode || currentUser?.role === 'admin' || (currentUser?.role as string) === 'Administrator';
 
-  // Active Edition State (Default: EA 11)
+  // Active Edition State (Default: EA 16)
   const [editions, setEditions] = useState<string[]>(() => {
     const stored = safeLocalStorageGet<string[]>('melayu_ea_editions', INITIAL_EA_EDITIONS);
-    if (!stored.includes('EA 11')) {
-      return ['EA 11', ...stored];
-    }
-    return stored;
+    const combined = Array.from(new Set([...INITIAL_EA_EDITIONS, ...stored]));
+    return combined;
   });
-  const [selectedEdition, setSelectedEdition] = useState<string>('EA 11');
+  const [selectedEdition, setSelectedEdition] = useState<string>('EA 16');
 
-  // Main Records State (automatically purged of filter metadata rows & ensures EA 11 seeded if not explicitly cleared)
+  // Print Status Filter State: 'All' (Keduanya), 'Sudah' (Sudah Mengisi), 'Belum' (Belum Mengisi)
+  const [printStatusFilter, setPrintStatusFilter] = useState<'All' | 'Sudah' | 'Belum'>('All');
+
+  // Main Records State (automatically purged of filter metadata rows & ensures EA 16/11 seeded if not explicitly cleared)
   const [records, setRecords] = useState<EmployeeAdvocacyItem[]>(() => {
     const stored = safeLocalStorageGet<EmployeeAdvocacyItem[]>('melayu_ea_records', INITIAL_EMPLOYEE_ADVOCACY);
     const cleaned = sanitizeEmployeeRecords(stored).clean;
-    const isEA11Cleared = safeLocalStorageGet<string>('melayu_ea_ea_11_cleared', 'false') === 'true';
-    const hasEA11 = cleaned.some(r => (r.edition || '').toUpperCase() === 'EA 11');
-    if (!hasEA11 && !isEA11Cleared) {
-      const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
-      return [...cleaned, ...ea11Seed];
+    const isEA16Cleared = safeLocalStorageGet<string>('melayu_ea_ea_16_cleared', 'false') === 'true';
+    const hasEA16 = cleaned.some(r => (r.edition || '').toUpperCase() === 'EA 16');
+    if (!hasEA16 && !isEA16Cleared) {
+      const ea16Seed = createInitialEmployeesForEdition('EA 16');
+      return [...cleaned, ...ea16Seed];
     }
     return cleaned;
   });
@@ -92,7 +94,19 @@ export default function EmployeeAdvocacySection({
   const [previewZoom, setPreviewZoom] = useState<number>(100);
   const pdfIframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  // Sync with Firestore on mount with automated data sanitation and EA 11 sync
+  // Automatically seed initial employees for selected edition if none exist and not explicitly cleared
+  useEffect(() => {
+    const edKey = `melayu_ea_${selectedEdition.replace(/\s+/g, '_').toLowerCase()}_cleared`;
+    const isCleared = safeLocalStorageGet<string>(edKey, 'false') === 'true';
+    const hasRecords = records.some(r => (r.edition || '').toUpperCase() === selectedEdition.toUpperCase());
+    if (!hasRecords && !isCleared) {
+      const newSeed = createInitialEmployeesForEdition(selectedEdition);
+      setRecords(prev => [...prev, ...newSeed]);
+      newSeed.forEach(item => saveFirestoreDoc('employee_advocacy', item));
+    }
+  }, [selectedEdition]);
+
+  // Sync with Firestore on mount with automated data sanitation and EA sync
   useEffect(() => {
     const unsub = subscribeFirestoreCollection<EmployeeAdvocacyItem>(
       'employee_advocacy',
@@ -100,25 +114,13 @@ export default function EmployeeAdvocacySection({
       (firestoreData) => {
         if (firestoreData && firestoreData.length > 0) {
           const { clean, removed } = sanitizeEmployeeRecords(firestoreData);
-          const isEA11Cleared = safeLocalStorageGet<string>('melayu_ea_ea_11_cleared', 'false') === 'true';
-          const hasEA11 = clean.some(r => (r.edition || '').toUpperCase() === 'EA 11');
-          if (!hasEA11 && !isEA11Cleared) {
-            const ea11Seed = INITIAL_EMPLOYEE_ADVOCACY.filter(r => (r.edition || '').toUpperCase() === 'EA 11');
-            const merged = [...clean, ...ea11Seed];
-            setRecords(merged);
-            safeLocalStorageSet('melayu_ea_records', JSON.stringify(merged));
-          } else {
-            setRecords(clean);
-          }
+          setRecords(clean);
           
           // Auto-discover any distinct editions present in records so they appear at top
           const docEditions = Array.from(new Set(clean.map(r => r.edition).filter(Boolean))) as string[];
-          if (!docEditions.includes('EA 11')) {
-            docEditions.unshift('EA 11');
-          }
           if (docEditions.length > 0) {
             setEditions(prev => {
-              const combined = Array.from(new Set(['EA 11', ...docEditions, ...prev]));
+              const combined = Array.from(new Set([...INITIAL_EA_EDITIONS, ...docEditions, ...prev]));
               return combined;
             });
           }
@@ -189,6 +191,13 @@ export default function EmployeeAdvocacySection({
   const sudahCount = currentEditionRecords.filter(r => r.status === 'Sudah').length;
   const belumCount = currentEditionRecords.filter(r => r.status === 'Belum').length;
   const complianceRate = totalCount > 0 ? Math.round((sudahCount / totalCount) * 100) : 0;
+
+  // Filtered records for printing (Sudah Mengisi, Belum Mengisi, or Keduanya)
+  const printableRecords = currentEditionRecords.filter(item => {
+    if (printStatusFilter === 'Sudah') return item.status === 'Sudah';
+    if (printStatusFilter === 'Belum') return item.status === 'Belum';
+    return true;
+  });
 
   // Filtered Display List with dynamic alphabetical sort
   const filteredRecords = currentEditionRecords
@@ -966,7 +975,7 @@ export default function EmployeeAdvocacySection({
                   Layanan Informasi Publikasi
                 </span>
                 <span className="px-2.5 py-0.5 bg-amber-400 text-slate-950 text-[11px] font-black rounded-full uppercase shadow-xs">
-                  Target Edisi: EA 11
+                  Target Edisi: {selectedEdition}
                 </span>
                 <span className="flex items-center space-x-1 text-emerald-400 text-xs font-semibold">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -975,10 +984,10 @@ export default function EmployeeAdvocacySection({
               </div>
               <h1 className="text-xl md:text-2xl font-display font-extrabold tracking-tight text-white flex items-center space-x-2.5">
                 <Share2 className="w-6 h-6 text-sky-300" />
-                <span>Monitoring Pengisian Employee Advocacy EA 11</span>
+                <span>Monitoring Pengisian Employee Advocacy ({selectedEdition})</span>
               </h1>
               <p className="text-xs md:text-sm text-slate-300 max-w-2xl">
-                Pantauan tingkat kepatuhan dan status pengisian Employee Advocacy EA 11 seluruh pegawai Kantor Wilayah DJPb Provinsi Riau.
+                Pantauan tingkat kepatuhan dan status pengisian Employee Advocacy {selectedEdition} seluruh pegawai Kantor Wilayah DJPb Provinsi Riau.
               </p>
             </div>
           </div>
@@ -1936,7 +1945,7 @@ export default function EmployeeAdvocacySection({
                     onChange={(e) => setUploadTargetEdition(e.target.value)}
                     className="px-2.5 py-1 text-xs font-bold bg-white border border-amber-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   >
-                    <optgroup label="Edisi Standar (EA 01 - EA 11)">
+                    <optgroup label="Edisi Standar (EA 01 - EA 16)">
                       {STANDARD_EA_EDITIONS.map((ed) => (
                         <option key={ed} value={ed}>{ed}</option>
                       ))}
@@ -2251,11 +2260,74 @@ export default function EmployeeAdvocacySection({
               </div>
             </div>
 
+            {/* Print Filter Selector Bar (Sudah Mengisi, Belum Mengisi, Keduanya) */}
+            <div className="bg-slate-800/90 border-b border-slate-700 px-4 md:px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs print:hidden shrink-0">
+              <div className="flex items-center space-x-2 text-slate-200">
+                <Filter className="w-3.5 h-3.5 text-sky-400" />
+                <span className="font-bold text-slate-100">Kategori Data Cetak Laporan:</span>
+              </div>
+
+              <div className="flex items-center space-x-1 bg-slate-900/80 p-1 rounded-lg border border-slate-700">
+                <button
+                  type="button"
+                  id="btn-print-filter-all"
+                  onClick={() => {
+                    setPrintStatusFilter('All');
+                    setTimeout(() => generatePdfPreview(), 100);
+                  }}
+                  className={`px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                    printStatusFilter === 'All'
+                      ? 'bg-sky-500 text-slate-950 shadow-xs'
+                      : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                  title="Tampilkan seluruh pegawai (Sudah & Belum Mengisi)"
+                >
+                  Keduanya ({currentEditionRecords.length})
+                </button>
+
+                <button
+                  type="button"
+                  id="btn-print-filter-sudah"
+                  onClick={() => {
+                    setPrintStatusFilter('Sudah');
+                    setTimeout(() => generatePdfPreview(), 100);
+                  }}
+                  className={`flex items-center space-x-1 px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                    printStatusFilter === 'Sudah'
+                      ? 'bg-emerald-500 text-slate-950 shadow-xs'
+                      : 'text-emerald-300 hover:bg-slate-800'
+                  }`}
+                  title="Hanya cetak pegawai yang SUDAH mengisi"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Sudah Mengisi ({sudahCount})</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="btn-print-filter-belum"
+                  onClick={() => {
+                    setPrintStatusFilter('Belum');
+                    setTimeout(() => generatePdfPreview(), 100);
+                  }}
+                  className={`flex items-center space-x-1 px-3 py-1 rounded-md font-bold transition-all cursor-pointer ${
+                    printStatusFilter === 'Belum'
+                      ? 'bg-rose-500 text-slate-950 shadow-xs'
+                      : 'text-rose-300 hover:bg-slate-800'
+                  }`}
+                  title="Hanya cetak pegawai yang BELUM mengisi"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  <span>Belum Mengisi ({belumCount})</span>
+                </button>
+              </div>
+            </div>
+
             {/* Instruction Notice Banner */}
             <div className="bg-sky-50 border-b border-sky-100 px-4 md:px-6 py-2 flex items-center space-x-2.5 text-xs text-sky-950 print:hidden shrink-0">
               <Info className="w-4 h-4 text-sky-600 shrink-0" />
               <div className="flex-1 leading-relaxed">
-                <strong>Pratinjau Dokumen Siap:</strong> Tampilan di bawah ini adalah format resmi dokumen A4 Kanwil DJPb Riau. 
+                <strong>Pratinjau Dokumen Siap:</strong> Tampilan di bawah ini adalah format resmi dokumen A4 Kanwil DJPb Riau ({printStatusFilter === 'Sudah' ? 'Kategori: Sudah Mengisi' : printStatusFilter === 'Belum' ? 'Kategori: Belum Mengisi' : 'Kategori: Keduanya'}). 
                 Klik <strong>"Pilih Printer & Cetak"</strong> untuk mencetak langsung, atau <strong>"Simpan PDF"</strong> untuk mengunduh dokumen.
               </div>
             </div>
@@ -2342,7 +2414,13 @@ export default function EmployeeAdvocacySection({
                     LAPORAN MONITORING PENGISIAN EMPLOYEE ADVOCACY
                   </div>
                   <div className="text-xs font-bold text-slate-800 mt-1">
-                    Periode / Edisi: {selectedEdition}
+                    Periode / Edisi: {selectedEdition} • Status Pengisian: {
+                      printStatusFilter === 'Sudah' 
+                        ? 'Pegawai Sudah Mengisi' 
+                        : printStatusFilter === 'Belum' 
+                        ? 'Pegawai Belum Mengisi' 
+                        : 'Keduanya (Seluruh Pegawai)'
+                    }
                   </div>
                   <div className="text-[10px] text-slate-500 mt-0.5">
                     Tanggal Cetak: {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
@@ -2351,10 +2429,10 @@ export default function EmployeeAdvocacySection({
 
                 {/* Statistics Box */}
                 <div className="grid grid-cols-4 gap-2 mb-4 bg-slate-50 border border-slate-300 p-2.5 rounded text-[11px]">
-                  <div>Total Pegawai: <strong className="text-slate-900">{totalCount} Orang</strong></div>
+                  <div>Total Pegawai Edisi: <strong className="text-slate-900">{totalCount} Orang</strong></div>
                   <div>Sudah Mengisi: <strong className="text-emerald-700">{sudahCount} ({complianceRate}%)</strong></div>
                   <div>Belum Mengisi: <strong className="text-rose-700">{belumCount} Orang</strong></div>
-                  <div>Partisipasi: <strong className="text-sky-700">{complianceRate}%</strong></div>
+                  <div>Data Dicetak: <strong className="text-sky-700">{printableRecords.length} Orang ({printStatusFilter === 'Sudah' ? 'Sudah Mengisi' : printStatusFilter === 'Belum' ? 'Belum Mengisi' : 'Keduanya'})</strong></div>
                 </div>
 
                 {/* Table */}
@@ -2367,19 +2445,27 @@ export default function EmployeeAdvocacySection({
                     </tr>
                   </thead>
                   <tbody>
-                    {currentEditionRecords.map((item, idx) => (
-                      <tr key={item.id} className="border-b border-slate-200 hover:bg-slate-50/50">
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-center font-mono text-[10px]">{idx + 1}</td>
-                        <td className="py-1.5 px-2 border-r border-slate-200 text-slate-800 font-medium">{item.name}</td>
-                        <td className="py-1.5 px-2 text-center">
-                          <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-bold ${
-                            item.status === 'Sudah' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                          }`}>
-                            {item.status}
-                          </span>
+                    {printableRecords.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-6 text-center text-slate-500 font-semibold italic">
+                          Tidak ada data pegawai dengan status {printStatusFilter === 'Sudah' ? 'Sudah Mengisi' : 'Belum Mengisi'}.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      printableRecords.map((item, idx) => (
+                        <tr key={item.id} className="border-b border-slate-200 hover:bg-slate-50/50">
+                          <td className="py-1.5 px-2 border-r border-slate-200 text-center font-mono text-[10px]">{idx + 1}</td>
+                          <td className="py-1.5 px-2 border-r border-slate-200 text-slate-800 font-medium">{item.name}</td>
+                          <td className="py-1.5 px-2 text-center">
+                            <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-bold ${
+                              item.status === 'Sudah' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                            }`}>
+                              {item.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
 
