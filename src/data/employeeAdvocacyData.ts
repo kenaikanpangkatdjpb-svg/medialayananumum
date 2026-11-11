@@ -302,11 +302,9 @@ export function createInitialEmployeesForEdition(edition: string): EmployeeAdvoc
   }));
 }
 
-export const EA_16_EMPLOYEES: EmployeeAdvocacyItem[] = createInitialEmployeesForEdition('EA 16');
 export const EA_11_EMPLOYEES: EmployeeAdvocacyItem[] = createInitialEmployeesForEdition('EA 11');
 
 export const INITIAL_EMPLOYEE_ADVOCACY: EmployeeAdvocacyItem[] = [
   ...EA_08_EMPLOYEES,
-  ...EA_11_EMPLOYEES,
-  ...EA_16_EMPLOYEES
+  ...EA_11_EMPLOYEES
 ];

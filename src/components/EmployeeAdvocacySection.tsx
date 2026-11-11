@@ -40,34 +40,75 @@ interface ConfirmModalState {
   action: () => void;
 }
 
+// Permanent Deletion & Cleared Data Trackers
+function getDeletedEditions(): string[] {
+  return safeLocalStorageGet<string[]>('melayu_ea_deleted_editions', []);
+}
+
+function getClearedEditions(): string[] {
+  return safeLocalStorageGet<string[]>('melayu_ea_cleared_editions', []);
+}
+
+function addDeletedEdition(ed: string) {
+  const current = getDeletedEditions();
+  if (!current.some(x => x.toUpperCase() === ed.toUpperCase())) {
+    const updated = [...current, ed];
+    safeLocalStorageSet('melayu_ea_deleted_editions', JSON.stringify(updated));
+  }
+}
+
+function removeDeletedEdition(ed: string) {
+  const current = getDeletedEditions();
+  const updated = current.filter(x => x.toUpperCase() !== ed.toUpperCase());
+  safeLocalStorageSet('melayu_ea_deleted_editions', JSON.stringify(updated));
+}
+
+function addClearedEdition(ed: string) {
+  const current = getClearedEditions();
+  if (!current.some(x => x.toUpperCase() === ed.toUpperCase())) {
+    const updated = [...current, ed];
+    safeLocalStorageSet('melayu_ea_cleared_editions', JSON.stringify(updated));
+  }
+}
+
+function removeClearedEdition(ed: string) {
+  const current = getClearedEditions();
+  const updated = current.filter(x => x.toUpperCase() !== ed.toUpperCase());
+  safeLocalStorageSet('melayu_ea_cleared_editions', JSON.stringify(updated));
+}
+
 export default function EmployeeAdvocacySection({
   currentUser,
   isEditMode = false
 }: EmployeeAdvocacySectionProps) {
   const isAdmin = isEditMode || currentUser?.role === 'admin' || (currentUser?.role as string) === 'Administrator';
 
-  // Active Edition State (Default: EA 16)
+  // Active Edition State (Default: EA 11, filtering permanently deleted editions)
   const [editions, setEditions] = useState<string[]>(() => {
     const stored = safeLocalStorageGet<string[]>('melayu_ea_editions', INITIAL_EA_EDITIONS);
+    const deleted = getDeletedEditions();
     const combined = Array.from(new Set([...INITIAL_EA_EDITIONS, ...stored]));
-    return combined;
+    return combined.filter(ed => !deleted.some(d => d.toUpperCase() === ed.toUpperCase()));
   });
-  const [selectedEdition, setSelectedEdition] = useState<string>('EA 16');
+  const [selectedEdition, setSelectedEdition] = useState<string>(() => {
+    const deleted = getDeletedEditions();
+    const available = editions.filter(ed => !deleted.some(d => d.toUpperCase() === ed.toUpperCase()));
+    return available.includes('EA 11') ? 'EA 11' : available[0] || 'EA 11';
+  });
 
   // Print Status Filter State: 'All' (Keduanya), 'Sudah' (Sudah Mengisi), 'Belum' (Belum Mengisi)
   const [printStatusFilter, setPrintStatusFilter] = useState<'All' | 'Sudah' | 'Belum'>('All');
 
-  // Main Records State (automatically purged of filter metadata rows & ensures EA 16/11 seeded if not explicitly cleared)
+  // Main Records State (filtering permanently deleted and cleared records)
   const [records, setRecords] = useState<EmployeeAdvocacyItem[]>(() => {
     const stored = safeLocalStorageGet<EmployeeAdvocacyItem[]>('melayu_ea_records', INITIAL_EMPLOYEE_ADVOCACY);
     const cleaned = sanitizeEmployeeRecords(stored).clean;
-    const isEA16Cleared = safeLocalStorageGet<string>('melayu_ea_ea_16_cleared', 'false') === 'true';
-    const hasEA16 = cleaned.some(r => (r.edition || '').toUpperCase() === 'EA 16');
-    if (!hasEA16 && !isEA16Cleared) {
-      const ea16Seed = createInitialEmployeesForEdition('EA 16');
-      return [...cleaned, ...ea16Seed];
-    }
-    return cleaned;
+    const deleted = getDeletedEditions();
+    const cleared = getClearedEditions();
+    return cleaned.filter(r => {
+      const ed = (r.edition || '').toUpperCase();
+      return !deleted.some(d => d.toUpperCase() === ed) && !cleared.some(c => c.toUpperCase() === ed);
+    });
   });
 
   // Selected IDs for Bulk Actions (Admin Only)
@@ -94,19 +135,7 @@ export default function EmployeeAdvocacySection({
   const [previewZoom, setPreviewZoom] = useState<number>(100);
   const pdfIframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  // Automatically seed initial employees for selected edition if none exist and not explicitly cleared
-  useEffect(() => {
-    const edKey = `melayu_ea_${selectedEdition.replace(/\s+/g, '_').toLowerCase()}_cleared`;
-    const isCleared = safeLocalStorageGet<string>(edKey, 'false') === 'true';
-    const hasRecords = records.some(r => (r.edition || '').toUpperCase() === selectedEdition.toUpperCase());
-    if (!hasRecords && !isCleared) {
-      const newSeed = createInitialEmployeesForEdition(selectedEdition);
-      setRecords(prev => [...prev, ...newSeed]);
-      newSeed.forEach(item => saveFirestoreDoc('employee_advocacy', item));
-    }
-  }, [selectedEdition]);
-
-  // Sync with Firestore on mount with automated data sanitation and EA sync
+  // Sync with Firestore on mount with automated data sanitation, permanent deletion & clearing guards
   useEffect(() => {
     const unsub = subscribeFirestoreCollection<EmployeeAdvocacyItem>(
       'employee_advocacy',
@@ -114,14 +143,31 @@ export default function EmployeeAdvocacySection({
       (firestoreData) => {
         if (firestoreData && firestoreData.length > 0) {
           const { clean, removed } = sanitizeEmployeeRecords(firestoreData);
-          setRecords(clean);
+          const deleted = getDeletedEditions();
+          const cleared = getClearedEditions();
+
+          // Permanently filter out any deleted or cleared editions
+          const validClean = clean.filter(r => {
+            const ed = (r.edition || '').toUpperCase();
+            const isDeleted = deleted.some(d => d.toUpperCase() === ed);
+            const isCleared = cleared.some(c => c.toUpperCase() === ed);
+            if (isDeleted || isCleared) {
+              if (r?.id) {
+                deleteFirestoreDoc('employee_advocacy', r.id);
+              }
+              return false;
+            }
+            return true;
+          });
+
+          setRecords(validClean);
           
-          // Auto-discover any distinct editions present in records so they appear at top
-          const docEditions = Array.from(new Set(clean.map(r => r.edition).filter(Boolean))) as string[];
+          // Auto-discover any distinct valid editions
+          const docEditions = Array.from(new Set(validClean.map(r => r.edition).filter(Boolean))) as string[];
           if (docEditions.length > 0) {
             setEditions(prev => {
               const combined = Array.from(new Set([...INITIAL_EA_EDITIONS, ...docEditions, ...prev]));
-              return combined;
+              return combined.filter(ed => !deleted.some(d => d.toUpperCase() === ed.toUpperCase()));
             });
           }
 
@@ -384,6 +430,7 @@ export default function EmployeeAdvocacySection({
       action: () => {
         const idsToDelete = currentEditionRecords.map(r => r.id);
         const otherEditions = records.filter(r => (r.edition || 'EA 08') !== selectedEdition);
+        addClearedEdition(selectedEdition);
         setRecords(otherEditions);
         safeLocalStorageSet('melayu_ea_records', JSON.stringify(otherEditions));
         safeLocalStorageSet(`melayu_ea_${selectedEdition.replace(/\s+/g, '_').toLowerCase()}_cleared`, 'true');
@@ -414,6 +461,7 @@ export default function EmployeeAdvocacySection({
       confirmLabel: `Ya, Hapus Edisi ${targetEd}`,
       confirmVariant: 'danger',
       action: () => {
+        addDeletedEdition(targetEd);
         const newEditions = editions.filter(ed => ed !== targetEd);
         setEditions(newEditions);
         safeLocalStorageSet('melayu_ea_editions', JSON.stringify(newEditions));
@@ -449,28 +497,17 @@ export default function EmployeeAdvocacySection({
       return;
     }
 
-    // Clone existing list names with status 'Belum'
+    removeDeletedEdition(trimmed);
+    removeClearedEdition(trimmed);
+
     const newEditionsList = [trimmed, ...editions];
     setEditions(newEditionsList);
-
-    // Create default records for new edition based on existing unique employee names
-    const uniqueNames = Array.from(new Set(records.map(r => r.name)));
-    const newRecordsForEdition: EmployeeAdvocacyItem[] = (uniqueNames.length > 0 ? uniqueNames : INITIAL_EMPLOYEE_ADVOCACY.map(i => i.name)).map((name, idx) => ({
-      id: `ea-${trimmed.replace(/\s+/g, '').toLowerCase()}-${idx + 1}-${Date.now()}`,
-      name,
-      status: 'Belum',
-      edition: trimmed,
-      updatedAt: new Date().toISOString()
-    }));
-
-    const combined = [...records, ...newRecordsForEdition];
-    setRecords(combined);
-    newRecordsForEdition.forEach(item => saveFirestoreDoc('employee_advocacy', item));
+    safeLocalStorageSet('melayu_ea_editions', JSON.stringify(newEditionsList));
 
     setSelectedEdition(trimmed);
     setNewEditionName('');
     setShowNewEditionModal(false);
-    showNotice(`Edisi baru "${trimmed}" berhasil dibuat dengan ${newRecordsForEdition.length} pegawai.`);
+    showNotice(`Edisi baru "${trimmed}" berhasil dibuat. Silakan upload file Excel untuk mengisikan data.`);
   };
 
   // Reset to Default
@@ -760,6 +797,9 @@ export default function EmployeeAdvocacySection({
     if (excelPreviewData.length === 0) return;
     const targetEd = uploadTargetEdition || selectedEdition;
 
+    removeDeletedEdition(targetEd);
+    removeClearedEdition(targetEd);
+
     // Make sure edition exists in tabs and is placed at the top / active
     setEditions(prev => {
       const rest = prev.filter(ed => ed !== targetEd);
@@ -992,55 +1032,59 @@ export default function EmployeeAdvocacySection({
             </div>
           </div>
 
-          {/* Quick Actions (Admin Only) */}
-          {isAdmin && (
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                type="button"
-                id="btn-upload-ea-excel-main"
-                onClick={() => {
-                  setUploadTargetEdition(selectedEdition);
-                  setShowUploadModal(true);
-                }}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-sky-500 hover:bg-sky-600 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
-                title="Unggah / Impor file Excel pengisian Employee Advocacy"
-              >
-                <Upload className="w-4 h-4 text-slate-950" />
-                <span>Upload Excel</span>
-              </button>
+          {/* Quick Actions (Available for Admin, KPPN, and all users) */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  id="btn-upload-ea-excel-main"
+                  onClick={() => {
+                    setUploadTargetEdition(selectedEdition);
+                    setShowUploadModal(true);
+                  }}
+                  className="flex items-center space-x-1.5 px-3.5 py-2 bg-sky-500 hover:bg-sky-600 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+                  title="Unggah / Impor file Excel pengisian Employee Advocacy"
+                >
+                  <Upload className="w-4 h-4 text-slate-950" />
+                  <span>Upload Excel</span>
+                </button>
 
-              <button
-                type="button"
-                id="btn-copy-belum-wa"
-                onClick={handleCopyBelumList}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
-                title="Salin daftar pegawai yang belum mengisi untuk pengingat WhatsApp/Telegram"
-              >
-                {copyFeedback ? <Check className="w-4 h-4 text-slate-950" /> : <Copy className="w-4 h-4" />}
-                <span>{copyFeedback ? 'Tersalin!' : 'Salin Yang Belum'}</span>
-              </button>
+                <button
+                  type="button"
+                  id="btn-copy-belum-wa"
+                  onClick={handleCopyBelumList}
+                  className="flex items-center space-x-1.5 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+                  title="Salin daftar pegawai yang belum mengisi untuk pengingat WhatsApp/Telegram"
+                >
+                  {copyFeedback ? <Check className="w-4 h-4 text-slate-950" /> : <Copy className="w-4 h-4" />}
+                  <span>{copyFeedback ? 'Tersalin!' : 'Salin Yang Belum'}</span>
+                </button>
+              </>
+            )}
 
-              <button
-                type="button"
-                id="btn-export-ea-excel"
-                onClick={handleExportExcel}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Ekspor Excel</span>
-              </button>
+            <button
+              type="button"
+              id="btn-export-ea-excel"
+              onClick={handleExportExcel}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer active:scale-95"
+              title="Ekspor laporan ke format Microsoft Excel"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Ekspor Excel</span>
+            </button>
 
-              <button
-                type="button"
-                id="btn-print-ea"
-                onClick={handlePrint}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition-all border border-white/15 cursor-pointer"
-              >
-                <Printer className="w-4 h-4" />
-                <span>Cetak / PDF</span>
-              </button>
-            </div>
-          )}
+            <button
+              type="button"
+              id="btn-print-ea"
+              onClick={handlePrint}
+              className="flex items-center space-x-1.5 px-3.5 py-2 bg-sky-400 hover:bg-sky-300 text-slate-950 font-extrabold text-xs rounded-xl transition-all shadow-md cursor-pointer active:scale-95 border border-sky-300"
+              title="Cetak Laporan PDF (Sudah Mengisi, Belum Mengisi, dan Keduanya)"
+            >
+              <Printer className="w-4 h-4 text-slate-950" />
+              <span>Cetak Laporan PDF</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1318,26 +1362,39 @@ export default function EmployeeAdvocacySection({
             </button>
           </div>
 
-          {/* Quick Search */}
-          <div className="relative w-full md:w-72">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              id="search-ea-employee"
-              placeholder="Cari nama pegawai..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-djpb-blue focus:bg-white transition-all"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+          {/* Quick Search & Print PDF Button */}
+          <div className="flex items-center space-x-2 w-full md:w-auto">
+            <div className="relative flex-1 md:w-64">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                id="search-ea-employee"
+                placeholder="Cari nama pegawai..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-djpb-blue focus:bg-white transition-all"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              id="btn-control-print-ea-kppn"
+              onClick={handlePrint}
+              className="px-3.5 py-1.5 bg-djpb-blue hover:bg-djpb-blue-light text-white text-xs font-bold rounded-lg transition-all shadow-xs shrink-0 cursor-pointer flex items-center space-x-1.5"
+              title="Cetak Laporan PDF (Pilihan: Sudah Mengisi, Belum Mengisi, Keduanya)"
+            >
+              <Printer className="w-3.5 h-3.5 text-white" />
+              <span>Cetak Laporan PDF</span>
+            </button>
           </div>
         </div>
 
@@ -1471,10 +1528,33 @@ export default function EmployeeAdvocacySection({
             <tbody className="divide-y divide-slate-100 text-slate-800">
               {filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 5 : 3} className="py-10 text-center text-slate-400">
-                    <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                    <p className="font-semibold text-slate-600">Tidak ada data pegawai ditemukan</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Coba ubah kata kunci pencarian atau filter status.</p>
+                  <td colSpan={isAdmin ? 5 : 3} className="py-12 text-center text-slate-400 bg-slate-50/50">
+                    <FileSpreadsheet className="w-10 h-10 mx-auto mb-2 text-slate-300" />
+                    <p className="font-bold text-slate-700 text-sm">
+                      {currentEditionRecords.length === 0
+                        ? `Belum Ada Data Pengisian untuk ${selectedEdition}`
+                        : 'Tidak Ada Data Pegawai Ditemukan'}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                      {currentEditionRecords.length === 0
+                        ? (isAdmin 
+                            ? `Data ${selectedEdition} belum diunggah. Silakan unggah file Excel monitoring pengisian untuk mengisikan data pegawai.`
+                            : `Data pengisian Employee Advocacy ${selectedEdition} belum diunggah oleh pengelola.`)
+                        : 'Coba ubah kata kunci pencarian atau kata kunci filter status.'}
+                    </p>
+                    {currentEditionRecords.length === 0 && isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUploadTargetEdition(selectedEdition);
+                          setShowUploadModal(true);
+                        }}
+                        className="mt-4 px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all inline-flex items-center space-x-1.5 cursor-pointer active:scale-95"
+                      >
+                        <Upload className="w-4 h-4" />
+                        <span>Upload Excel {selectedEdition}</span>
+                      </button>
+                    )}
                   </td>
                 </tr>
               ) : (
