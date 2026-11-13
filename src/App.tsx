@@ -50,7 +50,7 @@ import {
   INITIAL_ALOKASI_BIDANG_2026,
   INITIAL_REALISASI_BIDANG_2026
 } from './mockData';
-import { deduplicateRoster, sortRosterChronologically, normalizeDateKey, alignOctoberRosterToPattern, ensureTwoGuardsForMorningShift } from './components/SecurityGuardSection';
+import { deduplicateRoster, sortRosterChronologically } from './components/SecurityGuardSection';
 import { getUsersFromFirestore, subscribeFirestoreCollection, saveFirestoreCollection, deleteFirestoreDoc, subscribeAppSettings } from './lib/firebase';
 import {
   safeLocalStorageSet,
@@ -200,37 +200,32 @@ export default function App() {
 
   // Security shifts state with local storage persistence
   const [securityShifts, setSecurityShifts] = useState<SecurityShift[]>(() => {
+    const hasNovPreset = localStorage.getItem('melayu_security_nov2026_preset_applied') === 'true';
+    const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
+    const isUserModified = localStorage.getItem('melayu_security_roster_user_modified') === 'true';
+    if (!hasNovPreset && !isCustomUploaded && !isUserModified) {
+      return INITIAL_SECURITY_SHIFTS;
+    }
     return safeParse<SecurityShift[]>('melayu_security_shifts', INITIAL_SECURITY_SHIFTS);
   });
 
   // Security roster state (individual per-guard schedule) with local storage persistence
   const [securityRoster, setSecurityRoster] = useState<SecurityRosterItem[]>(() => {
-    const parsed = safeParse<SecurityRosterItem[]>('melayu_security_roster', INITIAL_SECURITY_ROSTER);
-    const source = Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_SECURITY_ROSTER;
-    const clean = deduplicateRoster(source);
-    let storedTitle = localStorage.getItem('melayu_security_doc_title') || '';
-    if (!storedTitle || storedTitle.toUpperCase().includes('SEPTEMBER')) {
-      storedTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
-      localStorage.setItem('melayu_security_doc_title', storedTitle);
-    }
-    const titleUp = storedTitle.toUpperCase();
-    const isNovemberActive = titleUp.includes('NOVEMBER') || titleUp.includes('NOPEMBER');
-    const isOctoberActive = !isNovemberActive && titleUp.includes('OKTOBER');
-    const hasOctober = !isNovemberActive && clean.some(item => 
-      (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '', 10, 2026).startsWith('2026-10')
-    );
-    const filtered = (isOctoberActive || hasOctober)
-      ? clean.filter(item => {
-          const dKey = normalizeDateKey(item?.dateStr || '', 10, 2026);
-          const isAug = (item?.dateStr || '').toLowerCase().includes('agustus') || dKey.startsWith('2026-08');
-          const isSep = (item?.dateStr || '').toLowerCase().includes('september') || dKey.startsWith('2026-09');
-          return !isAug && !isSep;
-        })
-      : clean;
     const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
-    const alignedFiltered = (isOctoberActive || hasOctober) ? alignOctoberRosterToPattern(filtered) : filtered;
-    const toUse = (alignedFiltered.length === 0 && !isCleared) ? INITIAL_SECURITY_ROSTER : alignedFiltered;
-    return sortRosterChronologically(toUse);
+    if (isCleared) return [];
+    const hasNovPreset = localStorage.getItem('melayu_security_nov2026_preset_applied') === 'true';
+    const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
+    const isUserModified = localStorage.getItem('melayu_security_roster_user_modified') === 'true';
+    if (!hasNovPreset && !isCustomUploaded && !isUserModified) {
+      return INITIAL_SECURITY_ROSTER;
+    }
+    const parsed = safeParse<SecurityRosterItem[]>('melayu_security_roster', INITIAL_SECURITY_ROSTER);
+    if (isCustomUploaded || isUserModified) {
+      const clean = deduplicateRoster(Array.isArray(parsed) ? parsed : []);
+      return sortRosterChronologically(clean);
+    }
+    const source = Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_SECURITY_ROSTER;
+    return sortRosterChronologically(deduplicateRoster(source));
   });
 
   const [scholarships, setScholarships] = useState<ScholarshipInfo[]>(() => {
@@ -287,72 +282,25 @@ export default function App() {
     const unsubGkm = subscribeFirestoreCollection<GKMAgreement>('gkm', INITIAL_GKM_AGREEMENTS, setGkmList);
     const unsubRealizations = subscribeFirestoreCollection<RealizationProgress>('realizations', INITIAL_REALIZATION_PROGRESS, setRealizations);
     const unsubVisitors = subscribeFirestoreCollection<VisitorLog>('visitors', INITIAL_VISITOR_LOGS, setVisitorLogs);
-    const unsubShifts = subscribeFirestoreCollection<SecurityShift>('security_shifts', INITIAL_SECURITY_SHIFTS, (data) => {
-      const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
-      if (isCustomUploaded) {
-        const localStr = localStorage.getItem('melayu_security_shifts');
-        if (localStr) {
-          try {
-            const localShifts = JSON.parse(localStr);
-            if (Array.isArray(localShifts) && localShifts.length > 0) {
-              setSecurityShifts(localShifts);
-              return;
-            }
-          } catch (e) {}
-        }
-      }
-      setSecurityShifts(data);
-    });
+    const unsubShifts = subscribeFirestoreCollection<SecurityShift>('security_shifts', INITIAL_SECURITY_SHIFTS, setSecurityShifts);
     const unsubRoster = subscribeFirestoreCollection<SecurityRosterItem>(
       'security_roster', 
       INITIAL_SECURITY_ROSTER, 
       (data) => {
-        // Check for local custom Excel upload if cloud has incomplete or fewer entries
-        const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
-        let candidate = data;
-        if (isCustomUploaded) {
-          const localStr = localStorage.getItem('melayu_security_roster');
-          if (localStr) {
-            try {
-              const localRoster = JSON.parse(localStr);
-              if (Array.isArray(localRoster) && localRoster.length > 0) {
-                candidate = localRoster;
-              }
-            } catch (e) {}
-          }
+        const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
+        const isSeeded = localStorage.getItem('melayu_security_roster_seeded_v4') === 'true';
+        if (isCleared && (!data || data.length === 0)) {
+          setSecurityRoster([]);
+          return;
         }
-
-        if (Array.isArray(candidate) && candidate.length > 0) {
-          const cleanData = deduplicateRoster(candidate);
-          
-          // Purge any rogue August or September items when October schedule is active
-          let storedTitle = localStorage.getItem('melayu_security_doc_title') || '';
-          if (!storedTitle || storedTitle.toUpperCase().includes('SEPTEMBER')) {
-            storedTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
-            localStorage.setItem('melayu_security_doc_title', storedTitle);
-          }
-          const titleUp = storedTitle.toUpperCase();
-          const isNovemberActive = titleUp.includes('NOVEMBER') || titleUp.includes('NOPEMBER');
-          const isOctoberActive = !isNovemberActive && titleUp.includes('OKTOBER');
-          const hasOctober = !isNovemberActive && cleanData.some(item => 
-            (item?.dateStr || '').toLowerCase().includes('oktober') || normalizeDateKey(item?.dateStr || '', 10, 2026).startsWith('2026-10')
-          );
-          const filtered = (isOctoberActive || hasOctober)
-            ? cleanData.filter(item => {
-                const dKey = normalizeDateKey(item?.dateStr || '', 10, 2026);
-                const isAug = (item?.dateStr || '').toLowerCase().includes('agustus') || dKey.startsWith('2026-08');
-                const isSep = (item?.dateStr || '').toLowerCase().includes('september') || dKey.startsWith('2026-09');
-                return !isAug && !isSep;
-              })
-            : cleanData;
-
-          const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
-          const alignedFiltered = (isOctoberActive || hasOctober) ? alignOctoberRosterToPattern(filtered) : filtered;
-          const toUse = (alignedFiltered.length === 0 && !isCleared) ? INITIAL_SECURITY_ROSTER : alignedFiltered;
-
-          // Sort strictly chronologically by Hari, Tanggal, dan Jam!
-          const sorted = sortRosterChronologically(toUse);
+        if (Array.isArray(data) && data.length > 0) {
+          const cleanData = deduplicateRoster(data);
+          const sorted = sortRosterChronologically(cleanData);
           setSecurityRoster(sorted);
+        } else if (!isCleared && !isSeeded) {
+          setSecurityRoster(sortRosterChronologically(deduplicateRoster(INITIAL_SECURITY_ROSTER)));
+        } else {
+          setSecurityRoster([]);
         }
       }
     );

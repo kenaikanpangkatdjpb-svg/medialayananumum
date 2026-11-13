@@ -7,8 +7,8 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { SecurityShift, SecurityRosterItem } from '../types';
-import { INITIAL_SECURITY_SHIFTS, INITIAL_SECURITY_ROSTER, generateOctoberSecurityShifts } from '../mockData';
-import { saveFirestoreCollection, subscribeFirestoreCollection, saveFirestoreDoc } from '../lib/firebase';
+import { INITIAL_SECURITY_SHIFTS, INITIAL_SECURITY_ROSTER, generateOctoberSecurityShifts, generateNovemberSecurityShifts, generateNovemberSecurityRoster } from '../mockData';
+import { saveFirestoreCollection, subscribeFirestoreCollection, saveFirestoreDoc, getFirestoreDocOnce } from '../lib/firebase';
 import { safeLocalStorageSet } from '../lib/storage';
 import KemenkeuLogo from './KemenkeuLogo';
 import { exportElementToPdf, printDocumentElement } from '../lib/pdfExport';
@@ -24,36 +24,46 @@ export function extractMonthAndYearFromText(text: string): { month: number; year
   const up = text.toUpperCase();
   let month = -1;
 
-  // Prioritize October if explicitly present
-  if (/\b(OKTOBER|OCTOBER|OKT|OCT)\b/i.test(up)) {
-    month = 10;
-  } else {
-    for (let m = 0; m < ID_MONTHS_TITLE.length; m++) {
-      const mName = ID_MONTHS_TITLE[m].toUpperCase();
-      const reg = new RegExp(`\\b${mName}\\b`, 'i');
-      if (reg.test(up)) {
-        month = m + 1;
-        break;
-      }
+  // 1. First prioritize explicit "BULAN <MONTH>" or "PERIODE <MONTH>" pattern
+  const explicitBulan = up.match(/(?:BULAN|PERIODE)\s+(JANUARI|JANUARY|FEBRUARI|FEBRUARY|MARET|MARCH|APRIL|MEI|MAY|JUNI|JUNE|JULI|JULY|AGUSTUS|AUGUST|SEPTEMBER|OKTOBER|OCTOBER|NOVEMBER|NOPEMBER|DESEMBER|DECEMBER|JAN|FEB|MAR|APR|JUN|JUL|AGU|AGS|AUG|SEP|SEPT|OKT|OCT|NOV|NOP|DES|DEC)\b/);
+  const monthTokenToNum = (tok: string): number => {
+    const t = tok.toUpperCase();
+    if (t.startsWith('JAN')) return 1;
+    if (t.startsWith('FEB')) return 2;
+    if (t.startsWith('MAR')) return 3;
+    if (t.startsWith('APR')) return 4;
+    if (t === 'MEI' || t === 'MAY') return 5;
+    if (t.startsWith('JUN')) return 6;
+    if (t.startsWith('JUL')) return 7;
+    if (t.startsWith('AGU') || t.startsWith('AGS') || t.startsWith('AUG') || t.startsWith('ASG')) return 8;
+    if (t.startsWith('SEP')) return 9;
+    if (t.startsWith('OKT') || t.startsWith('OCT')) return 10;
+    if (t.startsWith('NOV') || t.startsWith('NOP')) return 11;
+    if (t.startsWith('DES') || t.startsWith('DEC')) return 12;
+    return -1;
+  };
+
+  if (explicitBulan) {
+    month = monthTokenToNum(explicitBulan[1]);
+  }
+
+  // 2. Scan full month names neutrally (without bias toward any specific month)
+  if (month === -1) {
+    const fullMatch = up.match(/(?<![A-Z])(JANUARI|JANUARY|FEBRUARI|FEBRUARY|MARET|MARCH|APRIL|MEI|MAY|JUNI|JUNE|JULI|JULY|AGUSTUS|AUGUST|SEPTEMBER|OKTOBER|OCTOBER|NOVEMBER|NOPEMBER|DESEMBER|DECEMBER)(?![A-Z])/i);
+    if (fullMatch) {
+      month = monthTokenToNum(fullMatch[1]);
     }
   }
 
+  // 3. Fallback to 3-4 letter month abbreviations
   if (month === -1) {
-    if (/\b(OKT|OCT)\b/i.test(up)) month = 10;
-    else if (/\b(AGU|AGS|AUG|ASG)\b/i.test(up)) month = 8;
-    else if (/\b(SEP|SEPT)\b/i.test(up)) month = 9;
-    else if (/\b(NOV)\b/i.test(up)) month = 11;
-    else if (/\b(DES|DEC)\b/i.test(up)) month = 12;
-    else if (/\b(JUL)\b/i.test(up)) month = 7;
-    else if (/\b(JUN)\b/i.test(up)) month = 6;
-    else if (/\b(MEI|MAY)\b/i.test(up)) month = 5;
-    else if (/\b(APR)\b/i.test(up)) month = 4;
-    else if (/\b(MAR)\b/i.test(up)) month = 3;
-    else if (/\b(FEB)\b/i.test(up)) month = 2;
-    else if (/\b(JAN)\b/i.test(up)) month = 1;
+    const abbrMatch = up.match(/(?<![A-Z])(JAN|FEB|MAR|APR|JUN|JUL|AGU|AGS|AUG|ASG|SEPT|SEP|OKT|OCT|NOV|NOP|DES|DEC)(?![A-Z])/i);
+    if (abbrMatch) {
+      month = monthTokenToNum(abbrMatch[1]);
+    }
   }
 
-  const yMatch = up.match(/\b(202[4-9]|203[0-9])\b/);
+  const yMatch = up.match(/(?<!\d)(202[4-9]|203[0-9])(?!\d)/);
   const year = yMatch ? parseInt(yMatch[1], 10) : 2026;
 
   return month !== -1 ? { month, year } : null;
@@ -63,7 +73,8 @@ export function extractMonthAndYearFromText(text: string): { month: number; year
 export function parseDateFromExcelCell(
   cellVal: any,
   contextMonth: number = 10,
-  contextYear: number = 2026
+  contextYear: number = 2026,
+  preferMonthFirst: boolean = false
 ): { year: number; month: number; day: number; dayName: string } | null {
   if (cellVal === null || cellVal === undefined) return null;
 
@@ -103,11 +114,11 @@ export function parseDateFromExcelCell(
   if (!str) return null;
 
   // Protect against time ranges or shift strings being erroneously parsed as dates
-  // e.g. "06.00/18.00", "18.00/06.00", "14.00/22.00", "06.00 - 18.00", "06.00", "18.00"
+  // e.g. "06.00/18.00", "07.00 - 15.00 WIB", "06.00 s/d 18.00", "18.00/06.00", "06.00"
   if (
-    /^(0?6[\.:]00|18[\.:]00|14[\.:]00|22[\.:]00)\s*[\/\-]\s*(0?6[\.:]00|18[\.:]00|14[\.:]00|22[\.:]00)$/i.test(str) ||
-    /^(shift\s*[123i]+|pagi|malam|sore|libur|off|lepas)$/i.test(str) ||
-    /^\d{1,2}[\.:]\d{2}$/.test(str)
+    /^\d{1,2}[\.:]\d{2}(?:\s*(?:[\/\-\–\—]|s\.?\s*\/?\s*d\.?|sd|to)\s*\d{1,2}[\.:]\d{2})+(?:\s*(?:WIB|WITA|WIT))?$/i.test(str) ||
+    /^(shift\s*[123iv]+|pagi|malam|sore|siang|libur|off|lepas)$/i.test(str) ||
+    /^\d{1,2}[\.:]\d{2}(?:\s*(?:WIB|WITA|WIT))?$/i.test(str)
   ) {
     return null;
   }
@@ -138,8 +149,9 @@ export function parseDateFromExcelCell(
     }
   }
 
-  // 4. Word Month matching e.g. "Kamis/ 1 Oktober 2026", "1 Okt 2026", "Oktober 1, 2026", "1-Okt-26"
-  const wordMonthMatch = lower.match(/(?:(\d{1,2})[\s\/\.\,\-]+([a-zA-Z]{3,12})|([a-zA-Z]{3,12})[\s\/\.\,\-]+(\d{1,2}))[\s\/\.\,\-]?(\d{2,4})?/);
+  // 4. Word Month matching e.g. "Kamis/ 1 Oktober 2026", "16 NOVEMBER2026", "24 / NOVEMBER 2026", "1-Okt-26"
+  const MONTH_PATTERN = 'januari|january|jan|februari|february|feb|maret|march|mar|april|apr|mei|may|juni|june|jun|juli|july|jul|agustus|august|agu|ags|aug|september|sept|sep|oktober|october|okt|oct|november|nopember|nov|nop|desember|december|des|dec';
+  const wordMonthMatch = lower.match(new RegExp(`(?:(?:^|[^\\d])(\\d{1,2})[\\s\\/\\.\\,\\-]*(${MONTH_PATTERN})(?![a-z])|(?<![a-z])(${MONTH_PATTERN})[\\s\\/\\.\\,\\-]+(\\d{1,2})(?!\\d))(?:[\\s\\/\\.\\,\\-]*(\\d{2,4})\\b)?`, 'i'));
   if (wordMonthMatch) {
     const dayStr = wordMonthMatch[1] || wordMonthMatch[4];
     const mStr = (wordMonthMatch[2] || wordMonthMatch[3] || '').toLowerCase();
@@ -155,7 +167,7 @@ export function parseDateFromExcelCell(
     else if (mStr.startsWith('agu') || mStr.startsWith('ags') || mStr.startsWith('aug') || mStr.startsWith('asg')) month = 8;
     else if (mStr.startsWith('sep')) month = 9;
     else if (mStr.startsWith('okt') || mStr.startsWith('oct')) month = 10;
-    else if (mStr.startsWith('nov')) month = 11;
+    else if (mStr.startsWith('nov') || mStr.startsWith('nop')) month = 11;
     else if (mStr.startsWith('des') || mStr.startsWith('dec')) month = 12;
 
     if (month !== -1 && day >= 1 && day <= 31) {
@@ -174,7 +186,31 @@ export function parseDateFromExcelCell(
     }
   }
 
-  // 5. Numeric dates: e.g. "01/10/2026", "10/01/2026", "2026-10-01", "1-10-2026"
+  // 4b. Roman numeral month matching e.g. "01/XI/2026", "1-XI-2026", "1 XI 2026"
+  const romanMatch = lower.match(/(?:^|[^\d])(\d{1,2})[\s\/\.\-]+(i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)(?:[\s\/\.\-]+(\d{2,4}))?(?![a-z0-9])/i);
+  if (romanMatch) {
+    const ROMAN_MONTHS: Record<string, number> = {
+      i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10, xi: 11, xii: 12
+    };
+    const day = parseInt(romanMatch[1], 10);
+    const month = ROMAN_MONTHS[romanMatch[2].toLowerCase()] || -1;
+    if (month !== -1 && day >= 1 && day <= 31) {
+      let year = contextYear;
+      if (romanMatch[3]) {
+        const y = parseInt(romanMatch[3], 10);
+        year = y < 100 ? 2000 + y : y;
+      }
+      const dObj = new Date(year, month - 1, day);
+      return {
+        year,
+        month,
+        day,
+        dayName: explicitDayName || ID_DAYS_UPPER[dObj.getDay()]
+      };
+    }
+  }
+
+  // 5. Numeric 3-part dates: e.g. "01/11/2026", "11/01/2026", "2026-11-01", "1-11-2026", "01.11.2026"
   const numMatch = lower.match(/(\d{1,4})[\/\.\-](\d{1,2})[\/\.\-](\d{1,4})/);
   if (numMatch) {
     const p1 = parseInt(numMatch[1], 10);
@@ -192,19 +228,15 @@ export function parseDateFromExcelCell(
       day = p3;
     } else {
       year = p3 < 100 ? 2000 + p3 : p3;
-      // Smart ambiguity resolution with contextMonth awareness:
-      if (p1 === contextMonth && p2 !== contextMonth && p2 <= 31) {
-        month = p1;
-        day = p2;
-      } else if (p2 === contextMonth && p1 !== contextMonth && p1 <= 31) {
-        month = p2;
-        day = p1;
-      } else if (p1 > 12 && p2 <= 12) {
+      if (p1 > 12 && p2 <= 12) {
         day = p1;
         month = p2;
       } else if (p2 > 12 && p1 <= 12) {
         day = p2;
         month = p1;
+      } else if (preferMonthFirst) {
+        month = p1;
+        day = p2;
       } else {
         // Default Indonesian format DD/MM/YYYY
         day = p1;
@@ -216,6 +248,34 @@ export function parseDateFromExcelCell(
       const dObj = new Date(year, month - 1, day);
       return {
         year,
+        month,
+        day,
+        dayName: explicitDayName || ID_DAYS_UPPER[dObj.getDay()]
+      };
+    }
+  }
+
+  // 5b. Numeric 2-part dates without year: e.g. "01/11", "1-11" (slash or dash only so 06.00 time is never matched)
+  const twoPartMatch = lower.match(/(?:^|[^\d])(\d{1,2})[\/\-](\d{1,2})(?!\d)/);
+  if (twoPartMatch) {
+    const p1 = parseInt(twoPartMatch[1], 10);
+    const p2 = parseInt(twoPartMatch[2], 10);
+    let day = p1;
+    let month = p2;
+    if (p1 > 12 && p2 <= 12) {
+      day = p1;
+      month = p2;
+    } else if (p2 > 12 && p1 <= 12) {
+      day = p2;
+      month = p1;
+    } else if (preferMonthFirst) {
+      month = p1;
+      day = p2;
+    }
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+      const dObj = new Date(contextYear, month - 1, day);
+      return {
+        year: contextYear,
         month,
         day,
         dayName: explicitDayName || ID_DAYS_UPPER[dObj.getDay()]
@@ -242,9 +302,14 @@ export function parseDateFromExcelCell(
 }
 
 // Extract normalized YYYY-MM-DD or unique day key from any date string variations
-export function normalizeDateKey(dateStr: string, contextMonth: number = 10, contextYear: number = 2026): string {
+export function normalizeDateKey(
+  dateStr: string,
+  contextMonth: number = 10,
+  contextYear: number = 2026,
+  preferMonthFirst: boolean = false
+): string {
   if (!dateStr) return '';
-  const parsed = parseDateFromExcelCell(dateStr, contextMonth, contextYear);
+  const parsed = parseDateFromExcelCell(dateStr, contextMonth, contextYear, preferMonthFirst);
   if (parsed) {
     return `${parsed.year}-${String(parsed.month).padStart(2, '0')}-${String(parsed.day).padStart(2, '0')}`;
   }
@@ -252,9 +317,14 @@ export function normalizeDateKey(dateStr: string, contextMonth: number = 10, con
 }
 
 // Standard display format for a date string: HARI/ Day Bulan Tahun (e.g. KAMIS/ 1 Oktober 2026)
-export function formatStandardDateStr(dateStr: string, contextMonth: number = 10, contextYear: number = 2026): string {
+export function formatStandardDateStr(
+  dateStr: string,
+  contextMonth: number = 10,
+  contextYear: number = 2026,
+  preferMonthFirst: boolean = false
+): string {
   if (!dateStr) return '';
-  const parsed = parseDateFromExcelCell(dateStr, contextMonth, contextYear);
+  const parsed = parseDateFromExcelCell(dateStr, contextMonth, contextYear, preferMonthFirst);
   if (parsed) {
     const monthName = ID_MONTHS_TITLE[parsed.month - 1] || 'Oktober';
     return `${parsed.dayName}/ ${parsed.day} ${monthName} ${parsed.year}`;
@@ -292,28 +362,102 @@ export function getHourSortValue(hours: string, location: string): number {
   return 888888;
 }
 
-// Sort roster strictly chronologically: 1. Hari & Tanggal -> 2. Jam Hadir -> 3. Lokasi -> 4. Urutan Shift (orderIndex) -> 5. Nama
-export function sortRosterChronologically(list: SecurityRosterItem[]): SecurityRosterItem[] {
+// Infer dominant month and year from a roster list by counting explicit month occurrences
+export function inferDominantMonthYear(roster: SecurityRosterItem[]): { month: number; year: number } {
+  const counts = new Map<string, { month: number; year: number; count: number }>();
+  for (const it of roster || []) {
+    const info = extractMonthAndYearFromText(it?.dateStr || '');
+    if (info) {
+      const k = `${info.year}-${info.month}`;
+      const existing = counts.get(k);
+      if (existing) {
+        existing.count++;
+      } else {
+        counts.set(k, { month: info.month, year: info.year, count: 1 });
+      }
+    }
+  }
+  let best: { month: number; year: number; count: number } | null = null;
+  counts.forEach((v) => {
+    if (!best || v.count > best.count) best = v;
+  });
+  if (best) return { month: (best as { month: number; year: number }).month, year: (best as { month: number; year: number }).year };
+
+  try {
+    const savedTitle = (typeof localStorage !== 'undefined' && localStorage.getItem('melayu_security_doc_title')) || '';
+    const titleInfo = extractMonthAndYearFromText(savedTitle);
+    if (titleInfo) return titleInfo;
+  } catch (e) {}
+
+  return { month: 11, year: 2026 };
+}
+
+// Uniform daily duty slot order:
+// 1. KANWIL DJPB Pagi (06.00 / 18.00) -> 2. Shift Sore (14.00 / 22.00) -> 3. KANWIL DJPB Malam (18.00 / 06.00) -> 4. Pos Lain -> 5. RUMAH DINAS (18.00 / 06.00) -> 6. LIBUR
+function getDutySlotRank(item: SecurityRosterItem): number {
+  const loc = (item.location || '').toUpperCase();
+  const hrs = (item.hours || '').trim();
+  if (loc.includes('LIBUR') || loc === 'OFF' || loc === 'LEPAS' || loc === 'L') return 40;
+  if (loc.includes('RUMAH') || loc.includes('RUMDIN')) return 30;
+  if (isMorningHours(hrs, loc)) return 10;
+  if (isEveningHours(hrs, loc)) return 15;
+  if (isNightHours(hrs, loc)) return 20;
+  if (!hrs || hrs === '-') return 28;
+  return 25;
+}
+
+// Sort roster chronologically with uniform daily shift/location order (preserving within-shift orderIndex)
+export function sortRosterChronologically(
+  list: SecurityRosterItem[],
+  contextMonth?: number,
+  contextYear?: number
+): SecurityRosterItem[] {
+  const inferred = (!contextMonth || !contextYear) ? inferDominantMonthYear(list || []) : null;
+  const effMonth = contextMonth || inferred?.month || 11;
+  const effYear = contextYear || inferred?.year || 2026;
+
   return [...list].sort((a, b) => {
-    // 1. Urutkan berdasarkan Hari & Tanggal (secara kronologis)
-    const keyA = normalizeDateKey(a.dateStr || '');
-    const keyB = normalizeDateKey(b.dateStr || '');
-    if (keyA !== keyB) {
+    const keyA = normalizeDateKey(a.dateStr || '', effMonth, effYear);
+    const keyB = normalizeDateKey(b.dateStr || '', effMonth, effYear);
+    const isIsoA = /^\d{4}-\d{2}-\d{2}$/.test(keyA);
+    const isIsoB = /^\d{4}-\d{2}-\d{2}$/.test(keyB);
+
+    // 1. Chronological date order when both are valid ISO dates (ISO dates always sort ahead of unparsed strings)
+    if (isIsoA !== isIsoB) {
+      return isIsoA ? -1 : 1;
+    }
+    if (isIsoA && isIsoB && keyA !== keyB) {
+      return keyA.localeCompare(keyB);
+    }
+    if (!isIsoA && !isIsoB && keyA !== keyB) {
       return keyA.localeCompare(keyB);
     }
 
-    // 2. Urutkan berdasarkan Jam Hadir (Pagi -> Sore -> Malam -> Libur)
+    // 2. Enforce uniform daily duty slot order (KANWIL Pagi -> Sore -> KANWIL Malam -> RUMAH DINAS -> LIBUR)
+    const slotA = getDutySlotRank(a);
+    const slotB = getDutySlotRank(b);
+    if (slotA !== slotB) {
+      return slotA - slotB;
+    }
+
+    // 3. Preserve relative Excel row order (orderIndex) within the same shift/location slot
+    const hasOrderA = typeof a.orderIndex === 'number';
+    const hasOrderB = typeof b.orderIndex === 'number';
+    if (hasOrderA && hasOrderB && a.orderIndex !== b.orderIndex) {
+      return a.orderIndex! - b.orderIndex!;
+    }
+
+    // 4. Fallback: Jam Hadir -> Lokasi -> Nama
     const hourA = getHourSortValue(a.hours || '', a.location || '');
     const hourB = getHourSortValue(b.hours || '', b.location || '');
     if (hourA !== hourB) {
       return hourA - hourB;
     }
 
-    // 3. Urutkan berdasarkan Lokasi: KANWIL DJPB -> RUMAH DINAS -> LIBUR
     const locRank = (loc: string) => {
       const up = (loc || '').toUpperCase();
       if (up.includes('KANWIL')) return 1;
-      if (up.includes('RUMAH')) return 2;
+      if (up.includes('RUMAH') || up.includes('RUMDIN')) return 2;
       if (up.includes('LIBUR')) return 3;
       return 4;
     };
@@ -323,14 +467,6 @@ export function sortRosterChronologically(list: SecurityRosterItem[]): SecurityR
       return rankA - rankB;
     }
 
-    // 4. Urutkan berdasarkan urutan rotasi resmi / orderIndex (Pagi 1 -> Pagi 2, Malam 1 -> Malam 2)
-    const orderA = typeof a.orderIndex === 'number' ? a.orderIndex : 0;
-    const orderB = typeof b.orderIndex === 'number' ? b.orderIndex : 0;
-    if (orderA !== orderB) {
-      return orderA - orderB;
-    }
-
-    // 5. Urutkan berdasarkan Nama Petugas (A-Z)
     return (a.name || '').localeCompare(b.name || '');
   }).map((item, idx) => ({
     ...item,
@@ -356,14 +492,13 @@ export function normalizeGuardName(name: string): string {
 
 export const OFFICIAL_SECURITY_GUARDS = ['ARIEF', 'ROBBY', 'ADITYA', 'ERWIN', 'RATMANSYAH', 'DIAN ARI'];
 
-// Helper to determine whether a given hours string and location represents morning shift (starts with 06.00 / 06.00/18.00 / Pagi)
 // Helper to split multiple guard names in a single cell whether delimited by /, comma, &, newline, dan, or space-concatenated
 export function splitMultipleGuardNames(text: string): string[] {
   if (!text) return [];
   const trimmed = text.trim();
   const standardDelim = trimmed
     .replace(/(\(?\d+[\.\-\)]\s*)/g, '\n$1')
-    .split(/[\/\n\r,&;]| dan | DAN /)
+    .split(/[\/\n\r,&;]|\s+-\s+|\bdan\b/i)
     .map(n => n.trim().replace(/^\(?\d+[\.\-\)]\s*/, '').trim())
     .filter(n => n.length > 1 && !/^(SHIFT|POS|PAGI|MALAM|SORE|LIBUR|OFF|-)$/i.test(n));
 
@@ -408,24 +543,20 @@ export function isMorningHours(hours: string, location?: string): boolean {
   const trimmed = hours.trim();
   const up = trimmed.toUpperCase();
 
-  // If location is Rumah Dinas, it is exclusively night shift (18.00/06.00)
   if (location && (location.toUpperCase().includes('RUMAH') || location.toUpperCase().includes('RUMDIN'))) {
     return false;
   }
 
   if (isEveningHours(hours, location)) return false;
 
-  // Smart resolution if string contains both 06 and 18:
-  // "06.00/18.00" -> 06 comes first -> morning
-  // "18.00/06.00" -> 18 comes first -> night
-  const idx06 = trimmed.search(/0?6[\.:]/);
-  const idx18 = trimmed.search(/18[\.:]/);
-  if (idx06 !== -1 && idx18 !== -1) {
-    return idx06 < idx18;
+  const tMatch = trimmed.match(/(\d{1,2})[\.:]\d{2}/);
+  if (tMatch) {
+    const startH = parseInt(tMatch[1], 10);
+    if (startH >= 5 && startH <= 11) return true;
+    if (startH >= 18 || startH <= 4) return false;
   }
 
   if (
-    /0?6[\.:]\d{2}/i.test(trimmed) ||
     /^(PUKUL\s*|JAM\s*|SHIFT\s*)?0?6/i.test(trimmed) ||
     up.includes('PAGI') ||
     /\bSHIFT\s*1\b/i.test(up) ||
@@ -438,11 +569,16 @@ export function isMorningHours(hours: string, location?: string): boolean {
   return false;
 }
 
-// Helper to determine whether a given hours string and location represents evening shift (14.00 / 14.00/22.00 / Sore)
+// Helper to determine whether a given hours string and location represents evening shift (12.00 - 17.59 / Sore)
 export function isEveningHours(hours: string, location?: string): boolean {
   if (!hours || hours.trim() === '-' || (location && location.toUpperCase().includes('LIBUR'))) return false;
   const trimmed = hours.trim();
   const up = trimmed.toUpperCase();
+  const tMatch = trimmed.match(/(\d{1,2})[\.:]\d{2}/);
+  if (tMatch) {
+    const startH = parseInt(tMatch[1], 10);
+    if (startH >= 12 && startH <= 17) return true;
+  }
   return (
     /^(PUKUL\s*|JAM\s*|SHIFT\s*)?14[\.:]/i.test(trimmed) ||
     /14[\.:]?00\s*[\/\-\s*sd\.]+\s*22/i.test(trimmed) ||
@@ -455,7 +591,7 @@ export function isEveningHours(hours: string, location?: string): boolean {
   );
 }
 
-// Helper to determine whether a given hours string and location represents night shift (18.00 / 18.00/06.00 / Malam / Rumah Dinas)
+// Helper to determine whether a given hours string and location represents night shift (18.00 - 04.59 / Malam / Rumah Dinas)
 export function isNightHours(hours: string, location?: string): boolean {
   if (!hours || hours.trim() === '-' || (location && location.toUpperCase().includes('LIBUR'))) return false;
   const trimmed = hours.trim();
@@ -463,14 +599,14 @@ export function isNightHours(hours: string, location?: string): boolean {
 
   if (location && (location.toUpperCase().includes('RUMAH') || location.toUpperCase().includes('RUMDIN'))) return true;
 
-  const idx06 = trimmed.search(/0?6[\.:]/);
-  const idx18 = trimmed.search(/18[\.:]/);
-  if (idx06 !== -1 && idx18 !== -1) {
-    return idx18 < idx06;
+  const tMatch = trimmed.match(/(\d{1,2})[\.:]\d{2}/);
+  if (tMatch) {
+    const startH = parseInt(tMatch[1], 10);
+    if (startH >= 18 || startH <= 4) return true;
+    return false;
   }
 
   if (
-    /18[\.:]\d{2}/i.test(trimmed) ||
     /^(PUKUL\s*|JAM\s*|SHIFT\s*)?18/i.test(trimmed) ||
     up.includes('MALAM') ||
     /\bSHIFT\s*3\b/i.test(up) ||
@@ -491,58 +627,67 @@ export function isMorningShift(hours: string, location: string): boolean {
 // Parse duty cells in matrix / roster tables into clean location, hours, and shift category
 export function parseDutyCellValue(rawVal: string): { location: string; hours: string; shiftType: 'morning' | 'evening' | 'night' | 'rumdin' | 'libur' } {
   const up = (rawVal || '').trim().toUpperCase();
-  if (!up || up === '-' || up === '0' || up.includes('LIBUR') || up.includes('OFF') || up.includes('LEPAS') || up === 'L') {
+  if (!up || up === '-' || up === '0' || up === 'X' || up.includes('LIBUR') || /\bOFF\b/.test(up) || /\bLEPAS\b/.test(up) || up === 'L') {
     return { location: 'LIBUR', hours: '-', shiftType: 'libur' };
   }
-  if (up.includes('RUMAH') || up.includes('RUMDIN') || up.includes('JABATAN') || up === 'RD') {
-    return { location: 'RUMAH DINAS', hours: '18.00/06.00', shiftType: 'rumdin' };
+  if (up.includes('RUMAH') || up.includes('RUMDIN') || up.includes('JABATAN') || up === 'RD' || up === 'R') {
+    return { location: 'RUMAH DINAS', hours: '18.00 / 06.00', shiftType: 'rumdin' };
+  }
+
+  // Common shorthand codes for calendar/matrix grids
+  if (up === 'KP' || up === 'PK' || up === 'P1' || up === 'P2' || up === 'PG') {
+    return { location: 'KANWIL DJPB', hours: '06.00 / 18.00', shiftType: 'morning' };
+  }
+  if (up === 'KM' || up === 'MK' || up === 'M1' || up === 'M2' || up === 'ML') {
+    return { location: 'KANWIL DJPB', hours: '18.00 / 06.00', shiftType: 'night' };
+  }
+  if (up === 'S1' || up === 'S2' || up === 'SR') {
+    return { location: 'KANWIL DJPB', hours: '14.00 / 22.00', shiftType: 'evening' };
   }
 
   // Check Evening first (14.00)
   if (isEveningHours(up)) {
-    return { location: 'KANWIL DJPB', hours: '14.00/22.00', shiftType: 'evening' };
+    return { location: 'KANWIL DJPB', hours: '14.00 / 22.00', shiftType: 'evening' };
   }
 
   // Check Night next (18.00 / 18.00/06.00 / MALAM / M / SHIFT 3)
   if (isNightHours(up)) {
-    return { location: 'KANWIL DJPB', hours: '18.00/06.00', shiftType: 'night' };
+    return { location: 'KANWIL DJPB', hours: '18.00 / 06.00', shiftType: 'night' };
   }
 
   // Check Morning (06.00 / 06.00/18.00 / PAGI / P / SHIFT 1)
   if (isMorningHours(up)) {
-    return { location: 'KANWIL DJPB', hours: '06.00/18.00', shiftType: 'morning' };
+    return { location: 'KANWIL DJPB', hours: '06.00 / 18.00', shiftType: 'morning' };
   }
 
-  return { location: 'KANWIL DJPB', hours: '06.00/18.00', shiftType: 'morning' };
+  return { location: 'KANWIL DJPB', hours: '06.00 / 18.00', shiftType: 'morning' };
 }
 
-// Normalize raw hours text to official standard
+// Normalize raw hours text while preserving explicit Excel time ranges verbatim
 export function normalizeHours(rawHours: string, location: string): string {
   const normLoc = (location || '').trim().toUpperCase();
   if (normLoc.includes('LIBUR') || normLoc === 'OFF' || normLoc === 'LEPAS' || normLoc === 'L') {
     return '-';
   }
   const trimmed = (rawHours || '').trim();
-  if (!trimmed || trimmed === '-' || trimmed === '0' || trimmed.toUpperCase() === 'LIBUR' || trimmed.toUpperCase() === 'OFF') {
+  const up = trimmed.toUpperCase();
+  if (!trimmed || trimmed === '-' || trimmed === '0' || up === 'LIBUR' || up === 'OFF' || up === 'LEPAS' || up === 'L') {
     return '-';
   }
 
-  // Night variations: 18.00, 18:00, 18-06, 18.00/06.00, MALAM, SHIFT 3, SHIFT III, M
-  if (isNightHours(trimmed, normLoc)) {
-    return '18.00/06.00';
+  // If Excel already contains an explicit time range (e.g. "06.00/18.00", "07.00 - 19.00", "06:00 - 14:00"), keep it verbatim!
+  if (/\d{1,2}[\.:]\d{2}\s*[\/\-\–\—\s]+\s*\d{1,2}[\.:]\d{2}/.test(trimmed)) {
+    return trimmed;
   }
 
-  // Evening variations: 14.00, 14:00, 14-22, 14.00/22.00, SORE, SIANG, SHIFT 2, SHIFT II, S
-  if (isEveningHours(trimmed, normLoc)) {
-    return '14.00/22.00';
-  }
-
-  // Morning variations: 06.00, 06:00, 06-18, 06/18, 06.00/18.00, PAGI, SHIFT 1, SHIFT I, P
-  if (isMorningHours(trimmed, normLoc)) {
+  // Convert shorthand labels/codes into standard shift hours
+  if (up === 'PAGI' || up === 'P' || up === 'SHIFT 1' || up === 'SHIFT I' || up === '1' || up === '06-18' || up === '06/18') {
     return '06.00/18.00';
   }
-
-  if (normLoc.includes('RUMAH') || normLoc.includes('RUMDIN')) {
+  if (up === 'SORE' || up === 'SIANG' || up === 'S' || up === 'SHIFT 2' || up === 'SHIFT II' || up === '2' || up === '14-22' || up === '14/22') {
+    return '14.00/22.00';
+  }
+  if (up === 'MALAM' || up === 'M' || up === 'SHIFT 3' || up === 'SHIFT III' || up === '3' || up === '18-06' || up === '18/06') {
     return '18.00/06.00';
   }
 
@@ -680,45 +825,24 @@ export function ensureTwoGuardsForMorningShift(list: SecurityRosterItem[]): Secu
   return alignOctoberRosterToPattern(list);
 }
 
-// Deduplicate roster entries: ensures each officer appears once per date, and retains official roster statuses (including LIBUR)
+// Deduplicate exact duplicate roster entries while preserving exact Excel names, locations, hours, and dates
 export function deduplicateRoster(roster: SecurityRosterItem[], contextMonth?: number, contextYear?: number): SecurityRosterItem[] {
   if (!roster || roster.length === 0) return [];
   
   // Detect dominant month & year dynamically from the roster if not provided
-  let effMonth = contextMonth;
-  let effYear = contextYear;
-  if (!effMonth || !effYear) {
-    for (const it of roster) {
-      const info = extractMonthAndYearFromText(it?.dateStr || '');
-      if (info) {
-        if (!effMonth) effMonth = info.month;
-        if (!effYear) effYear = info.year;
-        break;
-      }
-    }
-  }
-  if (!effMonth) {
-    const savedTitle = (typeof localStorage !== 'undefined' && localStorage.getItem('melayu_security_doc_title')) || '';
-    const mInfo = extractMonthAndYearFromText(savedTitle);
-    if (mInfo) {
-      effMonth = mInfo.month;
-      effYear = mInfo.year;
-    }
-  }
-  effMonth = effMonth || 11;
-  effYear = effYear || 2026;
+  const inferred = (!contextMonth || !contextYear) ? inferDominantMonthYear(roster) : null;
+  const effMonth = contextMonth || inferred?.month || 11;
+  const effYear = contextYear || inferred?.year || 2026;
 
   const seenKeys = new Set<string>();
   const cleanList: SecurityRosterItem[] = [];
 
   for (const rawItem of roster) {
     if (!rawItem) continue;
-    const rawName = (rawItem.name || '').trim();
+    const rawName = (rawItem.name || '').trim().replace(/\s+/g, ' ');
     const rawDate = (rawItem.dateStr || '').trim();
     if (!rawName || !rawDate) continue;
 
-    const rawLocUp = (rawItem.location || '').trim().toUpperCase();
-    const rawHoursUp = (rawItem.hours || '').trim().toUpperCase();
     const rawNameUp = rawName.toUpperCase();
 
     // Skip if name is literally placeholder or separator
@@ -727,55 +851,48 @@ export function deduplicateRoster(roster: SecurityRosterItem[], contextMonth?: n
     }
 
     // Check if name cell contains multiple officers (e.g. "ROBBY / DIAN ARI")
-    const subNames = (rawName.includes('/') || rawName.includes('\n') || rawName.includes('&') || / dan /i.test(rawName) || (rawName.includes(',') && !rawName.includes('SH') && !rawName.includes('SE')))
+    const hasAcademicDegree = /,\s*(S\.|M\.|A\.Md|SH|SE|ST|MM|AK)/i.test(rawName);
+    const subNames = (rawName.includes('/') || rawName.includes('\n') || rawName.includes('&') || / dan /i.test(rawName) || (rawName.includes(',') && !hasAcademicDegree))
       ? rawName.split(/[\/\n\r,&]| dan | DAN /).map(n => n.trim().replace(/^\d+[\.\-\)]\s*/, '')).filter(Boolean)
       : [rawName];
 
     for (const subName of subNames) {
-      const normName = normalizeGuardName(subName);
-      if (!normName || normName === 'LIBUR' || normName === 'OFF' || normName === 'LEPAS' || normName === '-') continue;
+      const displayName = subName.trim().replace(/\s+/g, ' ');
+      const nameKey = displayName.toUpperCase();
+      if (!displayName || nameKey === 'LIBUR' || nameKey === 'OFF' || nameKey === 'LEPAS' || nameKey === '-') continue;
 
       const itemMonthInfo = extractMonthAndYearFromText(rawDate);
       const curMonth = itemMonthInfo?.month || effMonth;
       const curYear = itemMonthInfo?.year || effYear;
       const dateKey = normalizeDateKey(rawDate, curMonth, curYear);
-      if (!normName || !dateKey) continue;
+      if (!dateKey) continue;
 
-      let normLoc = (rawItem.location || 'KANWIL DJPB').trim().toUpperCase();
+      const rawLocClean = (rawItem.location || '').trim().replace(/\s+/g, ' ');
+      let normLoc = rawLocClean ? rawLocClean.toUpperCase() : 'KANWIL DJPB';
       let normHours = normalizeHours(rawItem.hours || '', normLoc);
 
       const isLibur = 
-        normLoc.includes('LIBUR') || normLoc === 'OFF' || normLoc === 'LEPAS' || normLoc === 'L' || 
-        (normHours === '-' && !normLoc.includes('KANWIL') && !normLoc.includes('RUMAH')) ||
-        (rawItem.hours || '').toUpperCase().includes('LIBUR') || (rawItem.hours || '').toUpperCase().includes('OFF') ||
-        (rawItem.location || '').toUpperCase().includes('LIBUR') || (rawItem.location || '').toUpperCase().includes('OFF');
+        normLoc === 'LIBUR' || normLoc === 'OFF' || normLoc === 'LEPAS' || normLoc === 'L' ||
+        normLoc.includes('LIBUR') ||
+        (rawItem.hours || '').toUpperCase().includes('LIBUR') || /\bOFF\b/.test((rawItem.hours || '').toUpperCase());
 
       if (isLibur) {
         normLoc = 'LIBUR';
         normHours = '-';
-      } else if (normLoc.includes('RUMAH') || normLoc.includes('RUMDIN') || normLoc.includes('JABATAN')) {
-        normLoc = 'RUMAH DINAS';
-        normHours = '18.00/06.00';
-      } else {
-        normLoc = 'KANWIL DJPB';
-        if (isMorningHours(normHours, normLoc)) {
-          normHours = '06.00/18.00';
-        } else if (isEveningHours(normHours, normLoc)) {
-          normHours = '14.00/22.00';
-        } else {
-          normHours = '18.00/06.00';
-        }
+      } else if (!normHours) {
+        normHours = '-';
       }
 
-      // Deduplication key: ensure each officer only appears ONCE for any given date
-      const key = `${dateKey}___${normName}`;
+      // Deduplication key: removes exact duplicate rows without discarding distinct shifts
+      const key = `${dateKey}___${nameKey}___${normLoc}___${normHours.toUpperCase()}`;
       if (!seenKeys.has(key)) {
         seenKeys.add(key);
         const stdDateStr = formatStandardDateStr(rawDate, curMonth, curYear);
+        const safeNameSlug = nameKey.replace(/[^a-zA-Z0-9_-]/g, '_');
         cleanList.push({
           ...rawItem,
-          id: rawItem.id || `ros-${dateKey}-${normName}-${cleanList.length}`,
-          name: normName,
+          id: rawItem.id ? String(rawItem.id).replace(/[^a-zA-Z0-9_-]/g, '_') : `ros-${dateKey}-${safeNameSlug}-${cleanList.length}`,
+          name: displayName,
           dateStr: stdDateStr || rawDate,
           location: normLoc,
           hours: normHours
@@ -811,10 +928,10 @@ export default function SecurityGuardSection({
   // Document Title & Dynamic Headers State (persisted to localStorage)
   const [docTitle, setDocTitle] = useState<string>(() => {
     const saved = localStorage.getItem('melayu_security_doc_title');
-    if (!saved || saved.toUpperCase().includes('SEPTEMBER')) {
-      return 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026';
+    if (saved && saved !== 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026') {
+      return saved;
     }
-    return saved;
+    return 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN NOVEMBER 2026';
   });
 
   const [dynamicHeaders, setDynamicHeaders] = useState<string[]>(() => {
@@ -824,18 +941,18 @@ export default function SecurityGuardSection({
 
   // Sync security configuration (docTitle, headers) across all PCs
   useEffect(() => {
-    const unsubConfig = subscribeFirestoreCollection<{ id: string; docTitle?: string; dynamicHeaders?: string[] }>(
+    const unsubConfig = subscribeFirestoreCollection<{ id: string; docTitle?: string; dynamicHeaders?: string[]; nov2026PresetApplied?: boolean }>(
       'security_config',
-      [{ id: 'main', docTitle: 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026', dynamicHeaders: ['NO.', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR'] }],
+      [{ id: 'main', docTitle: 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN NOVEMBER 2026', dynamicHeaders: ['NO.', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR'] }],
       (configs) => {
         const mainConfig = configs.find(c => c.id === 'main');
         if (mainConfig) {
+          if (mainConfig.nov2026PresetApplied === true) {
+            safeLocalStorageSet('melayu_security_nov2026_preset_applied', 'true');
+          }
           if (mainConfig.docTitle) {
-            const cleanTitle = mainConfig.docTitle.toUpperCase().includes('SEPTEMBER')
-              ? 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026'
-              : mainConfig.docTitle;
-            setDocTitle(cleanTitle);
-            safeLocalStorageSet('melayu_security_doc_title', cleanTitle);
+            setDocTitle(mainConfig.docTitle);
+            safeLocalStorageSet('melayu_security_doc_title', mainConfig.docTitle);
           }
           if (Array.isArray(mainConfig.dynamicHeaders) && mainConfig.dynamicHeaders.length > 0) {
             setDynamicHeaders(mainConfig.dynamicHeaders);
@@ -844,8 +961,51 @@ export default function SecurityGuardSection({
         }
       }
     );
-    return () => unsubConfig();
-  }, []);
+
+    let cancelled = false;
+    const ensureNov2026CloudSync = async () => {
+      if (!isAdmin) return;
+      const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
+      const alreadyMigrated = localStorage.getItem('melayu_security_nov2026_preset_applied') === 'true';
+      const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
+      if (isCleared || alreadyMigrated || isCustomUploaded) return;
+
+      const remoteCfg = await getFirestoreDocOnce<{ docTitle?: string; nov2026PresetApplied?: boolean }>('security_config', 'main');
+      if (cancelled) return;
+      if (localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true') return;
+      if (remoteCfg?.nov2026PresetApplied === true) {
+        safeLocalStorageSet('melayu_security_nov2026_preset_applied', 'true');
+        return;
+      }
+
+      const novRoster = generateNovemberSecurityRoster();
+      const novShifts = generateNovemberSecurityShifts();
+      const novTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN NOVEMBER 2026';
+      safeLocalStorageSet('melayu_security_nov2026_preset_applied', 'true');
+      safeLocalStorageSet('melayu_security_doc_title', novTitle);
+      safeLocalStorageSet('melayu_deleted_security_roster_ids', JSON.stringify([]));
+      safeLocalStorageSet('melayu_security_roster', JSON.stringify(novRoster));
+      safeLocalStorageSet('melayu_security_shifts', JSON.stringify(novShifts));
+      if (setSecurityRoster) setSecurityRoster(novRoster);
+      if (setSecurityShifts) setSecurityShifts(novShifts);
+      setDocTitle(novTitle);
+      saveFirestoreCollection('security_roster', novRoster);
+      saveFirestoreCollection('security_shifts', novShifts);
+      saveFirestoreDoc('security_config', {
+        id: 'main',
+        docTitle: novTitle,
+        dynamicHeaders: ['NO.', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR'],
+        nov2026PresetApplied: true,
+        updatedAt: new Date().toISOString()
+      });
+    };
+    ensureNov2026CloudSync();
+
+    return () => {
+      cancelled = true;
+      unsubConfig();
+    };
+  }, [isAdmin]);
 
   // Sync print and delete target months whenever document title changes
   useEffect(() => {
@@ -869,31 +1029,35 @@ export default function SecurityGuardSection({
   const [previewType, setPreviewType] = useState<'roster' | 'matrix'>('roster');
   const [previewRosterData, setPreviewRosterData] = useState<SecurityRosterItem[]>([]);
   const [previewMatrixData, setPreviewMatrixData] = useState<SecurityShift[]>([]);
-  const [previewDocTitle, setPreviewDocTitle] = useState<string>('JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026');
+  const [previewDocTitle, setPreviewDocTitle] = useState<string>('JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN NOVEMBER 2026');
   const [previewDocHeaders, setPreviewDocHeaders] = useState<string[]>(['NO.', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR']);
   const [excelFileName, setExcelFileName] = useState('');
   const [successNotice, setSuccessNotice] = useState('');
   const [uploadedWorkbook, setUploadedWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [availableSheets, setAvailableSheets] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>('');
-  const [previewMonth, setPreviewMonth] = useState<number>(10);
+  const [previewMonth, setPreviewMonth] = useState<number>(11);
   const [previewYear, setPreviewYear] = useState<number>(2026);
+  const [previewFormatLabel, setPreviewFormatLabel] = useState<string>('Tabel Roster');
+  const [previewColOptions, setPreviewColOptions] = useState<{ idx: number; label: string }[]>([]);
+  const [previewTabularMap, setPreviewTabularMap] = useState<{ name: number; date: number; loc: number; hours: number } | null>(null);
+  const [isApplyingExcel, setIsApplyingExcel] = useState(false);
 
   // Roster Add / Edit Modal
   const [showRosterModal, setShowRosterModal] = useState(false);
   const [editingRosterId, setEditingRosterId] = useState<string | null>(null);
   const [rosterForm, setRosterForm] = useState<Omit<SecurityRosterItem, 'id'>>({
-    name: 'ARIEF',
-    dateStr: 'KAMIS/ 1 Oktober 2026',
+    name: 'DIAN ARI',
+    dateStr: 'MINGGU/ 1 November 2026',
     location: 'KANWIL DJPB',
-    hours: '06.00/18.00'
+    hours: '06.00 / 18.00'
   });
 
   // Matrix Shift Add / Edit Modal
   const [showShiftModal, setShowShiftModal] = useState(false);
   const [editingShiftIndex, setEditingShiftIndex] = useState<number | null>(null);
   const [shiftForm, setShiftForm] = useState<SecurityShift>({
-    day: 'Senin',
+    day: 'Minggu',
     shiftMorning: '',
     shiftEvening: '',
     shiftNight: ''
@@ -901,38 +1065,48 @@ export default function SecurityGuardSection({
 
   // Print PDF Modal States (Cetak PDF Penjagaan Security Sesuai Bulan)
   const [showPrintPdfModal, setShowPrintPdfModal] = useState(false);
-  const [printMonth, setPrintMonth] = useState<number>(10);
+  const [printMonth, setPrintMonth] = useState<number>(11);
   const [printYear, setPrintYear] = useState<number>(2026);
   const [printDocFormat, setPrintDocFormat] = useState<'roster' | 'matrix'>('roster');
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [printOfficerFilter, setPrintOfficerFilter] = useState<string>('ALL');
   const [printIncludeKop, setPrintIncludeKop] = useState(true);
   const [printIncludeSignature, setPrintIncludeSignature] = useState(true);
-  const [printCityDate, setPrintCityDate] = useState('Pekanbaru, 31 Oktober 2026');
+  const [printCityDate, setPrintCityDate] = useState('Pekanbaru, 30 November 2026');
   const [signerKasubbagTitle] = useState('Kasubbag Kepegawaian dan Rumah Tangga');
   const [signerKasubbagName] = useState('HENDRA SUTIKNO');
   const [signerKasubbagNip] = useState('19780512 200212 1 002');
   const [signerKoorTitle] = useState('Koordinator / Komandan Regu Keamanan');
   const [signerKoorName] = useState('DIAN ARI');
   const [isExportingPdf, setIsExportingPdf] = useState(false);
-  const [deleteTargetMonth, setDeleteTargetMonth] = useState<number>(10);
+  const [deleteTargetMonth, setDeleteTargetMonth] = useState<number>(11);
   const [deleteTargetYear, setDeleteTargetYear] = useState<number>(2026);
 
-  // Count true duplicate officer assignments on the same date
+  // Count exact duplicate rows matching deduplicateRoster logic
   const duplicateCount = useMemo(() => {
     const list = securityRoster || [];
     const seen = new Set<string>();
     let dupes = 0;
     for (const item of list) {
       if (!item) continue;
-      const rawName = (item.name || '').trim();
+      const rawName = (item.name || '').trim().replace(/\s+/g, ' ');
       const rawDate = (item.dateStr || '').trim();
-      const normName = normalizeGuardName(rawName);
-      if (!normName || !rawDate) continue;
+      const nameKey = rawName.toUpperCase();
+      if (!nameKey || !rawDate || nameKey === 'LIBUR' || nameKey === 'OFF' || nameKey === 'LEPAS' || nameKey === '-') continue;
 
       const dateKey = normalizeDateKey(rawDate);
       if (!dateKey) continue;
-      const key = `${dateKey}___${normName}`;
+      const rawLocClean = (item.location || '').trim().replace(/\s+/g, ' ');
+      let normLoc = rawLocClean ? rawLocClean.toUpperCase() : 'KANWIL DJPB';
+      let normHours = normalizeHours(item.hours || '', normLoc);
+      const isLibur = normLoc.includes('LIBUR') || normLoc === 'OFF' || normLoc === 'LEPAS' || normLoc === 'L';
+      if (isLibur) {
+        normLoc = 'LIBUR';
+        normHours = '-';
+      } else if (!normHours) {
+        normHours = '-';
+      }
+      const key = `${dateKey}___${nameKey}___${normLoc}___${normHours.toUpperCase()}`;
       if (seen.has(key)) {
         dupes++;
       } else {
@@ -942,63 +1116,55 @@ export default function SecurityGuardSection({
     return dupes;
   }, [securityRoster]);
 
-  // Auto-clean any true duplicate entries or stray September/August entries reactively
-  useEffect(() => {
-    if (!setSecurityRoster || !securityRoster || securityRoster.length === 0) return;
-    const titleUpper = (docTitle || '').toUpperCase();
-    const isNovemberActive = titleUpper.includes('NOVEMBER') || titleUpper.includes('NOPEMBER') || titleUpper.includes('NOV');
-    const isOctoberActive = !isNovemberActive && titleUpper.includes('OKTOBER');
+  // Uploaded Excel data is preserved verbatim without reactive pattern overrides.
 
-    if (!isOctoberActive) return;
+  // Handler to load official November 2026 schedule (1-30 November 2026) matching the standard image layout
+  const handleLoadNovember2026Roster = () => {
+    if (!setSecurityRoster) return;
+    const novRoster = generateNovemberSecurityRoster();
+    const novShifts = generateNovemberSecurityShifts();
+    const novTitle = 'JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN NOVEMBER 2026';
 
-    const hasWrongMonthItems = securityRoster.some(it => {
-      const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
-      return (
-        dKey.startsWith('2026-09') || (it.dateStr || '').toLowerCase().includes('september') ||
-        dKey.startsWith('2026-08') || (it.dateStr || '').toLowerCase().includes('agustus')
-      );
+    try {
+      localStorage.removeItem('melayu_security_roster_cleared');
+      localStorage.removeItem('melayu_security_roster_user_modified');
+    } catch (e) {}
+    safeLocalStorageSet('melayu_deleted_security_roster_ids', JSON.stringify([]));
+    safeLocalStorageSet('melayu_security_nov2026_preset_applied', 'true');
+    safeLocalStorageSet('melayu_security_doc_title', novTitle);
+
+    setSecurityRoster(novRoster);
+    safeLocalStorageSet('melayu_security_roster', JSON.stringify(novRoster));
+    saveFirestoreCollection('security_roster', novRoster);
+
+    if (setSecurityShifts) {
+      setSecurityShifts(novShifts);
+      safeLocalStorageSet('melayu_security_shifts', JSON.stringify(novShifts));
+      saveFirestoreCollection('security_shifts', novShifts);
+    }
+
+    setDocTitle(novTitle);
+    setPrintMonth(11);
+    setPrintYear(2026);
+    setDeleteTargetMonth(11);
+    setDeleteTargetYear(2026);
+    setSearchQuery('');
+    setSelectedLocation('ALL');
+    setSelectedDate('ALL');
+
+    saveFirestoreDoc('security_config', {
+      id: 'main',
+      docTitle: novTitle,
+      dynamicHeaders: ['NO.', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR'],
+      nov2026PresetApplied: true,
+      updatedAt: new Date().toISOString()
     });
 
-    // Check if any day in October has only 1 guard on morning shift 06.00/18.00
-    const hasSingleGuardMornings = securityRoster.some(it => {
-      const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
-      return dKey.startsWith('2026-10');
-    }) && (() => {
-      const morningCountPerDay = new Map<string, number>();
-      securityRoster.forEach(it => {
-        if (isMorningHours(it.hours, it.location)) {
-          const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
-          if (dKey.startsWith('2026-10')) {
-            morningCountPerDay.set(dKey, (morningCountPerDay.get(dKey) || 0) + 1);
-          }
-        }
-      });
-      for (let day = 1; day <= 31; day++) {
-        const dKey = `2026-10-${String(day).padStart(2, '0')}`;
-        if ((morningCountPerDay.get(dKey) || 0) < 2) return true;
-      }
-      return false;
-    })();
-
-    if (duplicateCount > 0 || hasWrongMonthItems || hasSingleGuardMornings) {
-      const cleaned = deduplicateRoster(securityRoster);
-      const filteredForMonth = alignOctoberRosterToPattern(cleaned.filter(it => {
-        const dKey = normalizeDateKey(it.dateStr || '', 10, 2026);
-        const isSep = dKey.startsWith('2026-09') || (it.dateStr || '').toLowerCase().includes('september');
-        const isAug = dKey.startsWith('2026-08') || (it.dateStr || '').toLowerCase().includes('agustus');
-        return !isSep && !isAug;
-      }));
-
-      const sorted = sortRosterChronologically(filteredForMonth);
-      const isDifferent = sorted.length !== securityRoster.length ||
-        sorted.some((s, i) => s.id !== securityRoster[i]?.id || s.name !== securityRoster[i]?.name || s.dateStr !== securityRoster[i]?.dateStr || s.hours !== securityRoster[i]?.hours);
-      if (isDifferent) {
-        setSecurityRoster(sorted);
-        safeLocalStorageSet('melayu_security_roster', JSON.stringify(sorted));
-        saveFirestoreCollection('security_roster', sorted);
-      }
-    }
-  }, [securityRoster, duplicateCount, docTitle, setSecurityRoster]);
+    setSuccessNotice(
+      `BERHASIL DISINKRONKAN! Jadwal Penjagaan Security Bulan November 2026 (1–30 November 2026, 180 baris) telah dimuat sesuai susunan resmi.`
+    );
+    setTimeout(() => setSuccessNotice(''), 7000);
+  };
 
   // Handler to manually sync/repair shift pattern starting from 2 to 31 October to match 1 October (Optional Manual Tool)
   const handleAlignOctoberShifts = () => {
@@ -1024,14 +1190,11 @@ export default function SecurityGuardSection({
   };
   const handleFixTwoMorningGuards = handleAlignOctoberShifts;
 
-  // Clean and deduplicate roster handler
+  // Clean and deduplicate exact duplicate roster rows handler
   const handleCleanDuplicates = () => {
     if (!setSecurityRoster) return;
     const originalCount = (securityRoster || []).length;
-    const isOctoberActive = docTitle.toUpperCase().includes('OKTOBER') && !docTitle.toUpperCase().includes('NOVEMBER');
-    const cleaned = isOctoberActive
-      ? alignOctoberRosterToPattern(deduplicateRoster(securityRoster || []))
-      : deduplicateRoster(securityRoster || []);
+    const cleaned = deduplicateRoster(securityRoster || []);
     const sorted = sortRosterChronologically(cleaned);
     const removed = originalCount - cleaned.length;
     setSecurityRoster(sorted);
@@ -1046,7 +1209,7 @@ export default function SecurityGuardSection({
     setTimeout(() => setSuccessNotice(''), 6000);
   };
 
-  // Filtered Roster Data (Sorted strictly chronologically by Hari, Tanggal, Jam, dan Urutan Shift)
+  // Filtered Roster Data (Preserves uploaded Excel rows verbatim, sorted chronologically)
   const safeRoster = useMemo(() => {
     const list = securityRoster || [];
     const isCleared = localStorage.getItem('melayu_security_roster_cleared') === 'true';
@@ -1062,55 +1225,23 @@ export default function SecurityGuardSection({
       }
     } catch (e) {}
 
-    const deduplicated = deduplicateRoster(list).filter(item => !deletedIdsSet.has(item.id));
-    
-    // Determine active month
-    const titleUpper = (docTitle || '').toUpperCase();
-    const hasNovemberData = deduplicated.some(item => {
-      const dKey = normalizeDateKey(item.dateStr || '');
-      return dKey.startsWith('2026-11') || (item.dateStr || '').toLowerCase().includes('november') || (item.dateStr || '').toLowerCase().includes('nopember');
-    });
-    const isNovemberActive = titleUpper.includes('NOVEMBER') || titleUpper.includes('NOPEMBER') || hasNovemberData;
-
-    const hasOctoberData = !isNovemberActive && deduplicated.some(item => {
-      const dKey = normalizeDateKey(item.dateStr || '');
-      return dKey.startsWith('2026-10') || (item.dateStr || '').toLowerCase().includes('oktober');
-    });
-
-    const isOctoberActive = !isNovemberActive && titleUpper.includes('OKTOBER');
+    const filteredDeleted = list.filter(item => item && !deletedIdsSet.has(item.id));
     const isCustomUploaded = localStorage.getItem('melayu_security_roster_custom_uploaded') === 'true';
     const isUserModified = localStorage.getItem('melayu_security_roster_user_modified') === 'true';
 
-    let filteredList: SecurityRosterItem[] = deduplicated;
-
-    if (isNovemberActive) {
-      filteredList = deduplicated;
-    } else if (isOctoberActive || hasOctoberData) {
-      // Strictly isolate October items: purge any rogue September or August records from October roster
-      const octoberOnly = deduplicated.filter(item => {
-        if (!item) return false;
-        const dKey = normalizeDateKey(item.dateStr || '', 10, 2026);
-        const isSep = dKey.startsWith('2026-09') || (item.dateStr || '').toLowerCase().includes('september');
-        const isAug = dKey.startsWith('2026-08') || (item.dateStr || '').toLowerCase().includes('agustus');
-        return !isSep && !isAug;
-      });
-
-      if (!isCleared && !isCustomUploaded && !isUserModified && octoberOnly.length === 0 && INITIAL_SECURITY_ROSTER && INITIAL_SECURITY_ROSTER.length > 0) {
-        filteredList = INITIAL_SECURITY_ROSTER.filter(item => !deletedIdsSet.has(item.id));
-      } else {
-        // Enforce 2 officers for 06.00/18.00 every day in October 2026
-        filteredList = alignOctoberRosterToPattern(octoberOnly);
-      }
-    } else if (isCleared || isUserModified || isCustomUploaded) {
-      filteredList = deduplicated;
-    } else {
-      filteredList = INITIAL_SECURITY_ROSTER.filter(item => !deletedIdsSet.has(item.id));
+    let baseList = filteredDeleted;
+    if (!isCleared && !isUserModified && !isCustomUploaded && baseList.length === 0 && INITIAL_SECURITY_ROSTER && INITIAL_SECURITY_ROSTER.length > 0) {
+      baseList = INITIAL_SECURITY_ROSTER.filter(item => !deletedIdsSet.has(item.id));
     }
 
-    const finalClean = deduplicateRoster(filteredList);
-    // Strict chronological sort: Hari & Tanggal -> Jam Hadir -> Lokasi -> Urutan Shift (orderIndex) -> Nama
-    return sortRosterChronologically(finalClean);
-  }, [securityRoster, docTitle]);
+    const dom = inferDominantMonthYear(baseList);
+    const finalClean = deduplicateRoster(baseList, dom.month, dom.year);
+    return sortRosterChronologically(finalClean, dom.month, dom.year);
+  }, [securityRoster]);
+
+  const uniqueLocations = useMemo(() => {
+    return Array.from(new Set(safeRoster.map(r => (r?.location || '').trim().toUpperCase()).filter(Boolean)));
+  }, [safeRoster]);
 
   const filteredRoster = safeRoster.filter(item => {
     if (!item) return false;
@@ -1203,12 +1334,12 @@ export default function SecurityGuardSection({
       }
     });
 
-    if (!map.has('2026-10')) {
-      map.set('2026-10', {
-        month: 10,
+    if (!map.has('2026-11')) {
+      map.set('2026-11', {
+        month: 11,
         year: 2026,
-        label: 'Oktober 2026',
-        count: (safeRoster || []).filter(r => (r?.dateStr || '').toLowerCase().includes('oktober')).length
+        label: 'November 2026',
+        count: (safeRoster || []).filter(r => (r?.dateStr || '').toLowerCase().includes('november')).length
       });
     }
 
@@ -1236,7 +1367,7 @@ export default function SecurityGuardSection({
       return true;
     });
 
-    return sortRosterChronologically(filtered);
+    return sortRosterChronologically(filtered, printMonth, printYear);
   }, [safeRoster, printMonth, printYear, printOfficerFilter]);
 
   // RowSpan map for PDF print table
@@ -1270,7 +1401,7 @@ export default function SecurityGuardSection({
       const grp = dateMap.get(d)!;
       if (item.location === 'LIBUR') {
         grp.libur.push(item.name);
-      } else if (item.location === 'RUMAH DINAS') {
+      } else if (item.location.includes('RUMAH') || item.location.includes('RUMDIN')) {
         grp.rumdin.push(item.name);
       } else if (isMorningHours(item.hours, item.location)) {
         grp.morning.push(item.name);
@@ -1306,9 +1437,9 @@ export default function SecurityGuardSection({
           dateMap.set(d, { morning: [], evening: [], night: [], rumdin: [], libur: [] });
         }
         const grp = dateMap.get(d)!;
-        if (item.location === 'LIBUR' || item.hours === '-') {
+        if (item.location === 'LIBUR' || item.location.includes('LIBUR')) {
           grp.libur.push(item.name);
-        } else if (item.location === 'RUMAH DINAS') {
+        } else if (item.location.includes('RUMAH') || item.location.includes('RUMDIN')) {
           grp.rumdin.push(item.name);
         } else if (isMorningHours(item.hours, item.location)) {
           grp.morning.push(item.name);
@@ -1415,13 +1546,82 @@ export default function SecurityGuardSection({
     setTimeout(() => setSuccessNotice(''), 6000);
   };
 
-  // Helper to parse any sheet from an Excel workbook with custom target month/year
+  // Helper to extract worksheet grid while expanding merged cells and decoding Excel serial dates accurately
+  const extractSheetRowsWithMerges = (ws: XLSX.WorkSheet, date1904: boolean = false): { rows: string[][]; rowHasMerge: Set<string> } => {
+    const ref = ws['!ref'];
+    if (!ref) return { rows: [], rowHasMerge: new Set() };
+    const range = XLSX.utils.decode_range(ref);
+    const numRows = range.e.r + 1;
+    const numCols = range.e.c + 1;
+    const grid: string[][] = Array.from({ length: numRows }, () => Array(numCols).fill(''));
+    const rowHasMerge = new Set<string>();
+
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[addr];
+        if (!cell) continue;
+        let val = '';
+        if (cell.t === 'n' && typeof cell.v === 'number') {
+          if (cell.v > 20000 && ((cell.z && XLSX.SSF.is_date(cell.z)) || (cell.v >= 35000 && cell.v <= 70000))) {
+            const d = XLSX.SSF.parse_date_code(cell.v, { date1904 });
+            if (d && d.y >= 1900 && d.m >= 1 && d.m <= 12 && d.d >= 1 && d.d <= 31) {
+              const dObj = new Date(d.y, d.m - 1, d.d);
+              val = `${ID_DAYS_UPPER[dObj.getDay()]}/ ${d.d} ${ID_MONTHS_TITLE[d.m - 1]} ${d.y}`;
+            } else {
+              val = cell.w !== undefined ? String(cell.w).trim() : String(cell.v).trim();
+            }
+          } else if (cell.v >= 0 && cell.v < 1 && cell.z && XLSX.SSF.is_date(cell.z)) {
+            const d = XLSX.SSF.parse_date_code(cell.v, { date1904 });
+            if (d) {
+              val = `${String(d.H || 0).padStart(2, '0')}.${String(d.M || 0).padStart(2, '0')}`;
+            } else {
+              val = String(cell.v).trim();
+            }
+          } else {
+            const wStr = cell.w !== undefined ? String(cell.w).trim() : '';
+            val = (wStr && !/^#+$/.test(wStr)) ? wStr : String(cell.v).trim();
+          }
+        } else if (cell.t === 'd' && cell.v instanceof Date && !isNaN(cell.v.getTime())) {
+          const dt = cell.v;
+          val = `${ID_DAYS_UPPER[dt.getDay()]}/ ${dt.getDate()} ${ID_MONTHS_TITLE[dt.getMonth()]} ${dt.getFullYear()}`;
+        } else if (cell.t === 's' || cell.t === 'str') {
+          // Prefer exact string value cell.v over cell.w which SheetJS can truncate/mask for narrow columns
+          val = String(cell.v ?? cell.w ?? '').trim();
+        } else {
+          const wStr = cell.w !== undefined ? String(cell.w).trim() : '';
+          val = (wStr && !/^#+$/.test(wStr)) ? wStr : String(cell.v ?? '').trim();
+        }
+        grid[r][c] = val.replace(/[\u00A0\u200B\uFEFF]+/g, ' ').trim();
+      }
+    }
+
+    const merges = ws['!merges'] || [];
+    for (const m of merges) {
+      const topLeftVal = (grid[m.s.r]?.[m.s.c] || '').trim();
+      for (let r = m.s.r; r <= Math.min(m.e.r, numRows - 1); r++) {
+        for (let c = m.s.c; c <= Math.min(m.e.c, numCols - 1); c++) {
+          if (r === m.s.r && c === m.s.c) continue;
+          rowHasMerge.add(`${r}:${c}`);
+          if (topLeftVal && !grid[r][c]) {
+            grid[r][c] = topLeftVal;
+          }
+        }
+      }
+    }
+
+    return { rows: grid, rowHasMerge };
+  };
+
+  // Helper to parse any sheet from an Excel workbook with custom target month/year and optional tabular column override
   const parseWorkbookSheet = (
     wb: XLSX.WorkBook,
     targetSheetName: string,
     targetMonth: number = 10,
     targetYear: number = 2026,
-    fileName?: string
+    fileName?: string,
+    respectExplicitMonth: boolean = false,
+    colMapOverride?: { name: number; date: number; loc: number; hours: number } | null
   ) => {
     try {
       const ws = wb.Sheets[targetSheetName];
@@ -1429,7 +1629,8 @@ export default function SecurityGuardSection({
         alert(`Lembar kerja "${targetSheetName}" tidak ditemukan.`);
         return;
       }
-      const rawRows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: false });
+      const date1904 = Boolean(wb.Workbook?.WBProps?.date1904);
+      const { rows: rawRows, rowHasMerge } = extractSheetRowsWithMerges(ws, date1904);
       if (!rawRows || rawRows.length < 1) {
         alert(`Lembar kerja "${targetSheetName}" kosong.`);
         return;
@@ -1439,39 +1640,55 @@ export default function SecurityGuardSection({
       let headerRowIdx = -1;
       let bestScore = 0;
 
-      // Scan first 15 rows for header row, month info, and title
-      for (let r = 0; r < Math.min(rawRows.length, 15); r++) {
+      const isCalendarCellToken = (raw: string): boolean => {
+        const val = raw.trim().toUpperCase();
+        if (!val) return false;
+        if (/^0?([1-9]|[12]\d|3[01])$/.test(val)) return true;
+        if (/^(TGL|TANGGAL)\s*0?([1-9]|[12]\d|3[01])$/.test(val)) return true;
+        if (/^\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?$/.test(val)) return true;
+        if (/^\d{1,2}[\s\/\-]+(JAN|FEB|MAR|APR|MEI|MAY|JUN|JUL|AGU|AGS|AUG|SEP|SEPT|OKT|OCT|NOV|NOP|DES|DEC)\b/i.test(val)) return true;
+        if (/\b(?:SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\b/.test(val) && /\d{1,2}/.test(val)) return true;
+        return false;
+      };
+
+      // Scan first 30 rows for header row using unique cell values
+      for (let r = 0; r < Math.min(rawRows.length, 30); r++) {
         const rowArr = rawRows[r] || [];
-        const rowStr = rowArr.map(c => String(c || '').trim()).join(' ').toUpperCase();
+        const uniqueRowVals = Array.from(new Set(rowArr.map(c => String(c || '').trim()).filter(Boolean)));
+        if (uniqueRowVals.length < 2) continue;
 
-        const contentMonthInfo = extractMonthAndYearFromText(rowStr);
-        if (contentMonthInfo && contentMonthInfo.month !== targetMonth) {
-          targetMonth = contentMonthInfo.month;
-          targetYear = contentMonthInfo.year;
-          detectedTitle = `JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ${ID_MONTHS_TITLE[targetMonth - 1].toUpperCase()} ${targetYear}`;
-        }
+        let dayNumCount = 0;
+        let calCellCount = 0;
+        rowArr.forEach(c => {
+          const s = String(c || '').trim();
+          if (/^0?([1-9]|[12]\d|3[01])$/.test(s)) dayNumCount++;
+          if (isCalendarCellToken(s)) calCellCount++;
+        });
 
-        if ((rowStr.includes('JADWAL') || rowStr.includes('PENGAWASAN') || rowStr.includes('PENJAGAAN') || rowStr.includes('SATPAM') || rowStr.includes('KEAMANAN')) && !rowStr.includes('LOKASI') && !rowStr.includes('HADIR')) {
-          const nonNullCells = rowArr.map(c => String(c || '').trim()).filter(Boolean);
-          if (nonNullCells.length > 0) {
-            let t = nonNullCells.join(' ');
-            if (targetMonth === 10) {
-              t = t.replace(/BULAN\s+SEPTEMBER/gi, 'BULAN OKTOBER').replace(/\bSEPTEMBER\b/gi, 'OKTOBER');
-            }
-            detectedTitle = t;
-          }
-        }
+        // Skip rows that look like single-date data rows (unless the row is a horizontal calendar header row with >= 7 dates)
+        const hasFullDataDate = calCellCount < 7 && uniqueRowVals.some(v =>
+          (/^\s*(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\s*$/i.test(v)) ||
+          (/\b(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\b/i.test(v) && /\d{1,2}/.test(v)) ||
+          /^\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}$/.test(v)
+        );
+        if (hasFullDataDate) continue;
 
         let score = 0;
-        rowArr.forEach(c => {
-          const val = String(c || '').trim().toUpperCase();
-          if (val.includes('NAMA') || val.includes('PETUGAS') || val.includes('PERSONIL') || val.includes('SATPAM') || val.includes('SECURITY')) score += 4;
+        uniqueRowVals.forEach(rawCell => {
+          const val = rawCell.toUpperCase();
+          if (val.length > 50) return;
+          if (val.includes('NAMA') || val.includes('PETUGAS') || val.includes('PERSONIL') || val.includes('PERSONEL') || val.includes('SATPAM') || val.includes('SECURITY') || val.includes('ANGGOTA')) score += 4;
           if (val.includes('HARI') || val.includes('TANGGAL') || val.includes('TGL') || val.includes('DATE')) score += 4;
-          if (val.includes('LOKASI') || val.includes('POS') || val.includes('PENEMPATAN') || val.includes('TEMPAT')) score += 3;
-          if (val.includes('JAM') || val.includes('WAKTU') || val.includes('PUKUL') || val.includes('SHIFT')) score += 3;
-          if (val.includes('PAGI') || val.includes('MALAM') || val.includes('RUMAH') || val.includes('LIBUR')) score += 3;
-          if (val === 'NO' || val === 'NO.' || val === 'NOMOR') score += 1;
+          if (val.includes('LOKASI') || val.includes('POS') || val.includes('PENEMPATAN') || val.includes('TEMPAT') || val.includes('AREA') || val.includes('GEDUNG') || val.includes('UNIT')) score += 3;
+          if (val.includes('JAM') || val.includes('WAKTU') || val.includes('PUKUL') || val.includes('SHIFT') || val.includes('HADIR')) score += 3;
+          if (val.includes('PAGI') || val.includes('SORE') || val.includes('MALAM') || val.includes('RUMAH') || val.includes('RUMDIN') || val.includes('LIBUR')) score += 3;
+          if (/\d{1,2}[\.:]\d{2}\s*[\/\-\s]+\s*\d{1,2}[\.:]\d{2}/.test(val)) score += 3;
+          if (val === 'NO' || val === 'NO.' || val === 'NOMOR' || val === 'NO. URUT') score += 2;
         });
+
+        if (dayNumCount >= 7 || calCellCount >= 7) {
+          score += 25;
+        }
 
         if (score > bestScore) {
           bestScore = score;
@@ -1479,22 +1696,203 @@ export default function SecurityGuardSection({
         }
       }
 
+      let subHeaderRowIdx = -1;
+      let dataStartRowIdx = 0;
+
       if (headerRowIdx === -1 || bestScore < 2) {
-        headerRowIdx = 0;
+        // Check if the first non-empty row is already a data row (sheet has no header row) so day-1 rows are never dropped
+        const firstDataLikeIdx = rawRows.findIndex(row => {
+          const vals = (row || []).map(c => String(c || '').trim()).filter(Boolean);
+          if (vals.length < 2) return false;
+          const joined = vals.join(' ').toUpperCase();
+          return (
+            /\b(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\b/.test(joined) ||
+            /\d{1,2}\s*(JAN|FEB|MAR|APR|MEI|JUN|JUL|AGU|AGS|AUG|SEP|OKT|OCT|NOV|NOP|DES|DEC)/i.test(joined) ||
+            /\d{1,2}[\.:]\d{2}\s*[\/\-\–\s]+\s*\d{1,2}[\.:]\d{2}/.test(joined) ||
+            vals.some(v => OFFICIAL_SECURITY_GUARDS.some(g => v.toUpperCase() === g)) ||
+            joined.includes('KANWIL') ||
+            joined.includes('RUMAH DINAS')
+          );
+        });
+        if (firstDataLikeIdx !== -1) {
+          headerRowIdx = -1;
+          dataStartRowIdx = firstDataLikeIdx;
+        } else {
+          headerRowIdx = 0;
+          dataStartRowIdx = 1;
+        }
+      } else {
+        dataStartRowIdx = headerRowIdx + 1;
       }
 
-      // Multi-level header merge
-      const rawHeaderRow = (rawRows[headerRowIdx] || []).map(c => String(c || '').trim());
-      const prevRow = headerRowIdx > 0 ? (rawRows[headerRowIdx - 1] || []).map(c => String(c || '').trim()) : [];
+      // Check if headerRowIdx + 1 is a sub-header tier (e.g. LOKASI / JAM HADIR, DATANG / PULANG, 06.00/18.00, 1..31, or vertically merged header continuation)
+      if (headerRowIdx >= 0 && headerRowIdx + 1 < rawRows.length) {
+        const nextRow = (rawRows[headerRowIdx + 1] || []).map(c => String(c || '').trim());
+        const nextUnique = Array.from(new Set(nextRow.filter(Boolean)));
+        if (nextUnique.length > 0) {
+          const nextHasGuardName = nextUnique.some(v => OFFICIAL_SECURITY_GUARDS.some(g => v.toUpperCase() === g));
+          const nextHasDateToken = nextUnique.some(v =>
+            (/^\s*(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\s*$/i.test(v)) ||
+            (/\b(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\b/i.test(v) && /\d{1,2}/.test(v)) ||
+            /\d{1,2}\s*(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Nop|Des)/i.test(v) ||
+            /^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/.test(v)
+          );
+          const nextIsVerticalHeaderMergeClone = (rawRows[headerRowIdx] || []).some((hCell, cIdx) => {
+            const hStr = String(hCell || '').trim().toUpperCase();
+            return (
+              hStr !== '' &&
+              rowHasMerge.has(`${headerRowIdx + 1}:${cIdx}`) &&
+              String(nextRow[cIdx] || '').trim().toUpperCase() === hStr
+            );
+          });
+          const nextCalCount = nextRow.filter(isCalendarCellToken).length;
+          const nextHeaderSignals = nextUnique.filter(v => {
+            const up = v.toUpperCase();
+            return (
+              /^(NO\.?|NOMOR|NAMA|PETUGAS|PERSONIL|PERSONEL|SATPAM|TANGGAL|TGL|HARI|LOKASI|POS|PENEMPATAN|TEMPAT|AREA|GEDUNG|UNIT|JAM|JAM HADIR|WAKTU|PUKUL|DATANG|MASUK|PULANG|KELUAR|MULAI|SELESAI|AKHIR|PAGI|SORE|MALAM|RUMAH DINAS|RUMDIN|LIBUR|OFF|SHIFT\s*[123I]+|KETERANGAN|KET)$/i.test(up) ||
+              /^\d{1,2}[\.:]\d{2}\s*[\/\-\–\s]+\s*\d{1,2}[\.:]\d{2}$/.test(up) ||
+              /^0?([1-9]|[12]\d|3[01])$/.test(up)
+            );
+          }).length;
+          if (!nextHasGuardName && !nextHasDateToken && (nextIsVerticalHeaderMergeClone || nextCalCount >= 7 || nextHeaderSignals >= 2)) {
+            subHeaderRowIdx = headerRowIdx + 1;
+            dataStartRowIdx = headerRowIdx + 2;
+          }
+        }
+      }
+
+      let foundTitleRowMonth = false;
+      let titleMonth = targetMonth;
+      let titleYear = targetYear;
+      // Scan title rows (strictly rows BEFORE headerRowIdx, or before dataStartRowIdx when headerless)
+      const titleScanLimit = headerRowIdx >= 0 ? headerRowIdx : dataStartRowIdx;
+      for (let r = 0; r < titleScanLimit; r++) {
+        const rowArr = rawRows[r] || [];
+        const uniqueCells = Array.from(new Set(rowArr.map(c => String(c || '').trim()).filter(Boolean)));
+        if (uniqueCells.length === 0) continue;
+        const rowStr = uniqueCells.join(' ');
+        const rowUp = rowStr.toUpperCase();
+
+        if (!respectExplicitMonth) {
+          const contentMonthInfo = extractMonthAndYearFromText(rowUp);
+          if (contentMonthInfo && !/^PEKANBARU\b/i.test(rowUp)) {
+            targetMonth = contentMonthInfo.month;
+            targetYear = contentMonthInfo.year;
+            titleMonth = contentMonthInfo.month;
+            titleYear = contentMonthInfo.year;
+            foundTitleRowMonth = true;
+            detectedTitle = `JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ${ID_MONTHS_TITLE[targetMonth - 1].toUpperCase()} ${targetYear}`;
+          }
+        }
+
+        if ((rowUp.includes('JADWAL') || rowUp.includes('PENGAWASAN') || rowUp.includes('PENJAGAAN') || rowUp.includes('SATPAM') || rowUp.includes('KEAMANAN')) && !rowUp.includes('LOKASI') && !rowUp.includes('HADIR')) {
+          detectedTitle = rowStr;
+        }
+      }
+
+      // Detect whether numeric dates across ALL data rows follow US MM/DD/YYYY (stops before signature/summary footer)
+      let preferMonthFirst = false;
+      let maxP1 = 0;
+      let maxP2 = 0;
+      const numericP1Counts = new Map<number, number>();
+      const numericP2Counts = new Map<number, number>();
+      const SIGNATURE_FOOTER_RE = /^\s*(MENGETAHUI|PEKANBARU\s*,|DITETAPKAN\s+DI|KASUBBAG|KEPALA\s+(BAGIAN|KANTOR|SUBBAGIAN)|NIP[\s:\.]*\d|REKAPITULASI|RINGKASAN|JUMLAH\s+(SHIFT|KEHADIRAN|HARI|PIKET)|TOTAL\s+(SHIFT|KEHADIRAN|HARI|PIKET)|CATATAN\s*:|KETERANGAN\s*:|LEGENDA\s*:|DISUSUN\s+OLEH|DISETUJUI\s+OLEH|MENYETUJUI)/i;
+      for (let r = dataStartRowIdx; r < rawRows.length; r++) {
+        const rowArr = rawRows[r] || [];
+        const joinedForSig = rowArr.map(c => String(c || '').trim()).filter(Boolean).join(' ');
+        if (SIGNATURE_FOOTER_RE.test(joinedForSig)) break;
+        for (const c of rowArr) {
+          const cStr = String(c || '').trim();
+          if (!cStr || /^\d{1,2}[\.:]\d{2}(?:\s*[\/\-\–\s]|$)/.test(cStr)) continue;
+          const nm = cStr.match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{2,4})$/);
+          if (nm) {
+            const p1 = parseInt(nm[1], 10);
+            const p2 = parseInt(nm[2], 10);
+            if (p1 > maxP1) maxP1 = p1;
+            if (p2 > maxP2) maxP2 = p2;
+            numericP1Counts.set(p1, (numericP1Counts.get(p1) || 0) + 1);
+            numericP2Counts.set(p2, (numericP2Counts.get(p2) || 0) + 1);
+          }
+        }
+      }
+      if (maxP1 <= 12 && maxP2 > 12) {
+        preferMonthFirst = true;
+      } else if (maxP1 <= 12 && maxP2 <= 12 && foundTitleRowMonth && (numericP1Counts.get(titleMonth) || 0) >= 3 && (numericP2Counts.get(titleMonth) || 0) <= 1) {
+        preferMonthFirst = true;
+      }
+
+      // Infer dominant month/year across ALL actual data rows (stopping before signature footer)
+      if (!respectExplicitMonth) {
+        const monthCounts = new Map<string, number>();
+        for (let r = dataStartRowIdx; r < rawRows.length; r++) {
+          const rowArr = rawRows[r] || [];
+          const joinedForSig = rowArr.map(c => String(c || '').trim()).filter(Boolean).join(' ');
+          if (SIGNATURE_FOOTER_RE.test(joinedForSig)) break;
+          for (const c of rowArr) {
+            const cStr = String(c || '').trim();
+            if (!cStr) continue;
+            const info = extractMonthAndYearFromText(cStr);
+            if (info) {
+              const key = `${info.year}-${info.month}`;
+              monthCounts.set(key, (monthCounts.get(key) || 0) + 1);
+            } else if (!/^\d{1,2}[\.:]\d{2}(?:\s*[\/\-\–\s]|$)/.test(cStr) && /(\d{1,4})([\/\.\-])(\d{1,2}|i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)\2(\d{1,4})/i.test(cStr)) {
+              const parsed = parseDateFromExcelCell(cStr, targetMonth, targetYear, preferMonthFirst);
+              if (parsed) {
+                const key = `${parsed.year}-${parsed.month}`;
+                monthCounts.set(key, (monthCounts.get(key) || 0) + 1);
+              }
+            }
+          }
+        }
+        if (monthCounts.size > 0) {
+          let bestKey = '';
+          let maxC = 0;
+          monthCounts.forEach((cnt, k) => {
+            if (cnt > maxC) { maxC = cnt; bestKey = k; }
+          });
+          if (bestKey && (!foundTitleRowMonth || maxC >= 3)) {
+            const [yStr, mStr] = bestKey.split('-');
+            const newYear = parseInt(yStr, 10);
+            const newMonth = parseInt(mStr, 10);
+            const monthChangedFromTitle = foundTitleRowMonth && (newMonth !== titleMonth || newYear !== titleYear);
+            targetYear = newYear;
+            targetMonth = newMonth;
+            if (monthChangedFromTitle || !detectedTitle || detectedTitle.startsWith('JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ') || !extractMonthAndYearFromText(detectedTitle)) {
+              detectedTitle = `JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ${ID_MONTHS_TITLE[targetMonth - 1].toUpperCase()} ${targetYear}`;
+            }
+          }
+        }
+      }
+
+      // Build unified headerRow supporting both parent row above or sub-header row below
+      const baseHeaderRow = headerRowIdx >= 0 ? (rawRows[headerRowIdx] || []).map(c => String(c || '').trim()) : [];
+      const subHeaderRow = subHeaderRowIdx !== -1 ? (rawRows[subHeaderRowIdx] || []).map(c => String(c || '').trim()) : [];
+      const rawPrevRow = headerRowIdx > 0 ? (rawRows[headerRowIdx - 1] || []).map(c => String(c || '').trim()) : [];
+      const uniquePrevVals = Array.from(new Set(rawPrevRow.filter(Boolean)));
+      const prevJoined = uniquePrevVals.join(' ').toUpperCase();
+      const isPrevTitleRow =
+        uniquePrevVals.length < 2 ||
+        /\b(JADWAL|PENGAWASAN|PENJAGAAN|KEMENTERIAN|DIREKTORAT|KANWIL|PROVINSI|DAFTAR|REKAPITULASI|BULAN|PERIODE|TAHUN|SUBBAGIAN|BAGIAN|TENTANG|NOMOR|KEPUTUSAN)\b/.test(prevJoined) ||
+        /\b20\d{2}\b/.test(prevJoined);
+      const prevRow = isPrevTitleRow ? [] : rawPrevRow;
+
       let lastPrev = '';
       const filledPrev = prevRow.map(c => {
         if (c) { lastPrev = c; return c; }
         return lastPrev;
       });
-      const headerRow = rawHeaderRow.map((h, idx) => {
-        const p = filledPrev[idx] || '';
-        return (p && !h.toUpperCase().includes(p.toUpperCase())) ? `${p} ${h}`.trim() : h;
-      });
+
+      const headerLen = Math.max(baseHeaderRow.length, subHeaderRow.length, filledPrev.length);
+      const rawHeaderRow: string[] = [];
+      const headerRow: string[] = [];
+      for (let c = 0; c < headerLen; c++) {
+        const b = baseHeaderRow[c] || '';
+        const s = subHeaderRow[c] || '';
+        const p = filledPrev[c] || '';
+        const combinedSub = (b && s && !b.toUpperCase().includes(s.toUpperCase())) ? `${b} ${s}`.trim() : (s || b);
+        rawHeaderRow.push(s || b || p);
+        headerRow.push((p && !combinedSub.toUpperCase().includes(p.toUpperCase())) ? `${p} ${combinedSub}`.trim() : combinedSub);
+      }
 
       // Format detection
       const morningCols: number[] = [];
@@ -1503,14 +1901,30 @@ export default function SecurityGuardSection({
       const rumdinCols: number[] = [];
       const liburCols: number[] = [];
       let colMatrixDay = -1;
+      let colMatrixDayOnly = -1;
+
+      const hasDedicatedNameCol = headerRow.some(h => {
+        const up = h.toUpperCase();
+        const isLocName = up.includes('LOKASI') || up.includes('POS') || up.includes('TEMPAT') || up.includes('PENEMPATAN') || up.includes('GEDUNG') || up.includes('UNIT') || up.includes('SHIFT');
+        const isNameLike = !isLocName && (up.includes('NAMA') || up.includes('PETUGAS') || up.includes('PERSONIL') || up.includes('PERSONEL') || up.includes('SATPAM') || up.includes('SECURITY') || up.includes('ANGGOTA'));
+        const isShiftLike = up.includes('PAGI') || up.includes('SORE') || up.includes('MALAM') || up.includes('RUMAH') || up.includes('RUMDIN') || up.includes('LIBUR') || /\d{1,2}[\.:]\d{2}/.test(up);
+        return isNameLike && !isShiftLike;
+      });
+
+      const isTabularHeaderPresent = hasDedicatedNameCol || headerRow.some(h => {
+        const up = h.toUpperCase();
+        return up.includes('LOKASI') || up.includes('POS') || up.includes('PENEMPATAN') || up.includes('GEDUNG') || up.includes('UNIT') || up.includes('JAM HADIR');
+      });
 
       headerRow.forEach((h, colIdx) => {
         const hUp = h.toUpperCase();
-        if (colMatrixDay === -1 && (hUp.includes('HARI') || hUp.includes('TANGGAL') || hUp.includes('TGL') || hUp.includes('DAY') || hUp.includes('DATE'))) {
+        if ((hUp.includes('TANGGAL') || hUp.includes('TGL') || hUp.includes('DATE')) && colMatrixDay === -1) {
           colMatrixDay = colIdx;
+        } else if ((hUp.includes('HARI') || hUp.includes('DAY')) && !hUp.includes('TANGGAL') && !hUp.includes('TGL')) {
+          if (colMatrixDayOnly === -1) colMatrixDayOnly = colIdx;
         } else if (hUp.includes('RUMAH') || hUp.includes('RUMDIN') || hUp.includes('JABATAN') || hUp === 'RD') {
           rumdinCols.push(colIdx);
-        } else if (hUp.includes('LIBUR') || hUp.includes('OFF') || hUp.includes('LEPAS') || hUp === 'L') {
+        } else if (hUp.includes('LIBUR') || /\bOFF\b/.test(hUp) || /\bLEPAS\b/.test(hUp) || hUp === 'L') {
           liburCols.push(colIdx);
         } else if (isNightHours(hUp)) {
           nightCols.push(colIdx);
@@ -1520,115 +1934,177 @@ export default function SecurityGuardSection({
           morningCols.push(colIdx);
         }
       });
+      if (colMatrixDay === -1 && colMatrixDayOnly !== -1) {
+        colMatrixDay = colMatrixDayOnly;
+        colMatrixDayOnly = -1;
+      }
+
+      const STANDARD_TABULAR_HEADER_REGEX = /\b(NO|NO\.|NOMOR|NAMA|PETUGAS|PERSONIL|PERSONEL|SATPAM|SECURITY|ANGGOTA|HARI|TANGGAL|TGL|DATE|DAY|LOKASI|POS|PENEMPATAN|TEMPAT|GEDUNG|UNIT|JAM|HADIR|PUKUL|WAKTU|SHIFT|HOURS|STATUS|KETERANGAN|KET|PARAF|TTD|CATATAN|TOTAL|JUMLAH)\b/i;
 
       const guardCols: { colIdx: number; name: string }[] = [];
       rawHeaderRow.forEach((h, colIdx) => {
-        const cleanedName = normalizeGuardName(h);
-        if (cleanedName && (OFFICIAL_SECURITY_GUARDS.includes(cleanedName) || (cleanedName.length >= 3 && !/HARI|TANGGAL|DATE|NO|LOKASI|JAM|SHIFT/i.test(cleanedName)))) {
-          guardCols.push({ colIdx, name: cleanedName });
+        const trimmedH = h.trim();
+        if (!trimmedH || STANDARD_TABULAR_HEADER_REGEX.test(trimmedH)) return;
+        const cleanedName = normalizeGuardName(trimmedH);
+        if (OFFICIAL_SECURITY_GUARDS.includes(cleanedName) || (!isTabularHeaderPresent && trimmedH.length >= 3 && !/^\d+$/.test(trimmedH))) {
+          guardCols.push({ colIdx, name: trimmedH.toUpperCase() });
         }
       });
 
-      const dayCols: { colIdx: number; day: number }[] = [];
-      rawHeaderRow.forEach((h, colIdx) => {
-        const num = parseInt(h.trim(), 10);
-        if (!isNaN(num) && num >= 1 && num <= 31 && String(num) === h.trim()) {
-          dayCols.push({ colIdx, day: num });
+      const dayCols: { colIdx: number; day: number; month?: number; year?: number }[] = [];
+      headerRow.forEach((h, colIdx) => {
+        const rawCell = (rawHeaderRow[colIdx] || h || '').trim();
+        const matchSimpleDay = rawCell.match(/^(?:TGL\s*|TANGGAL\s*)?0?([1-9]|[12]\d|3[01])$/i);
+        if (matchSimpleDay) {
+          dayCols.push({ colIdx, day: parseInt(matchSimpleDay[1], 10) });
+        } else if (isCalendarCellToken(rawCell)) {
+          const parsed = parseDateFromExcelCell(rawCell, targetMonth, targetYear, preferMonthFirst);
+          if (parsed) {
+            dayCols.push({ colIdx, day: parsed.day, month: parsed.month, year: parsed.year });
+          }
         }
       });
 
-      const isShiftMatrixFormat = (morningCols.length > 0 || nightCols.length > 0 || rumdinCols.length > 0) && (colMatrixDay !== -1 || headerRow.length >= 3);
-      const isGuardColsFormat = guardCols.length >= 3;
-      const isCalendarGridFormat = dayCols.length >= 7;
+      const shiftMatrixColCount = morningCols.length + eveningCols.length + nightCols.length + rumdinCols.length + liburCols.length;
+      const isCalendarGridFormat = !colMapOverride && dayCols.length >= 7;
+      const isShiftMatrixFormat = !colMapOverride && !isCalendarGridFormat && !hasDedicatedNameCol && (morningCols.length > 0 || nightCols.length > 0 || rumdinCols.length > 0) && (colMatrixDay !== -1 || shiftMatrixColCount >= 2 || headerRow.length >= 3);
+      const isGuardColsFormat = !colMapOverride && !isCalendarGridFormat && !isShiftMatrixFormat && !isTabularHeaderPresent && guardCols.length >= 3;
+
+      // Sync targetMonth/targetYear when Calendar Grid headers explicitly carry full dates
+      if (isCalendarGridFormat && !respectExplicitMonth) {
+        const dcWithMonth = dayCols.find(dc => dc.month && dc.year);
+        if (dcWithMonth && dcWithMonth.month && dcWithMonth.year) {
+          targetMonth = dcWithMonth.month;
+          targetYear = dcWithMonth.year;
+          if (!extractMonthAndYearFromText(detectedTitle) || detectedTitle.startsWith('JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ')) {
+            detectedTitle = `JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN ${ID_MONTHS_TITLE[targetMonth - 1].toUpperCase()} ${targetYear}`;
+          }
+        }
+      }
 
       const parsedRoster: SecurityRosterItem[] = [];
       const parsedShifts: SecurityShift[] = [];
       let rowOrder = 0;
 
       if (isCalendarGridFormat) {
-        // FORMAT C
+        // FORMAT C: Calendar Grid (Rows = Officers, Columns = Days 1..31)
+        setPreviewFormatLabel('Matriks Kalender Bulanan (Baris = Petugas, Kolom = Tanggal)');
+        setPreviewTabularMap(null);
         let colGuardName = 0;
-        for (let c = 0; c < rawHeaderRow.length; c++) {
-          if (rawHeaderRow[c].toUpperCase().includes('NAMA') || rawHeaderRow[c].toUpperCase().includes('PETUGAS')) {
+        for (let c = 0; c < headerRow.length; c++) {
+          const curH = (headerRow[c] || '').toUpperCase();
+          if (curH.includes('NAMA') || curH.includes('PETUGAS') || curH.includes('PERSONIL') || curH.includes('PERSONEL')) {
             colGuardName = c;
             break;
           }
         }
         const dailyGroups = new Map<number, { morning: string[]; evening: string[]; night: string[]; rumdin: string[]; libur: string[] }>();
-        for (let d = 1; d <= 31; d++) {
+        const daysInTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
+        for (let d = 1; d <= daysInTargetMonth; d++) {
           dailyGroups.set(d, { morning: [], evening: [], night: [], rumdin: [], libur: [] });
         }
-        for (let i = headerRowIdx + 1; i < rawRows.length; i++) {
+        const tempCalItems: { day: number; rank: number; item: SecurityRosterItem }[] = [];
+        for (let i = dataStartRowIdx; i < rawRows.length; i++) {
           const row = rawRows[i];
           if (!row || row.length === 0) continue;
-          const guardNameRaw = String(row[colGuardName] || '').trim();
-          if (!guardNameRaw || /TOTAL|MENGETAHUI|CATATAN/i.test(guardNameRaw)) continue;
-          const guardName = normalizeGuardName(guardNameRaw);
-          dayCols.forEach(({ colIdx, day }) => {
+          const guardNameRaw = String(row[colGuardName] || '').trim().replace(/\s+/g, ' ');
+          if (!guardNameRaw || /^\s*(MENGETAHUI|PEKANBARU|DITETAPKAN|KASUBBAG|KEPALA\s+(BAGIAN|KANTOR)|NIP[\s:\.]*\d|TOTAL|JUMLAH|CATATAN|KETERANGAN|LEGENDA|[PMLR]\s*=)/i.test(guardNameRaw)) continue;
+          const guardName = guardNameRaw.replace(/^\d+[\.\-\)]\s*/, '').trim();
+          if (!guardName || /^(NO\.?|NAMA|PETUGAS)$/i.test(guardName)) continue;
+          const safeCalNameSlug = guardName.replace(/[^a-zA-Z0-9_-]/g, '_');
+          dayCols.forEach(({ colIdx, day, month: cMonth, year: cYear }) => {
+            const effM = cMonth || targetMonth;
+            const effY = cYear || targetYear;
+            const maxD = new Date(effY, effM, 0).getDate();
+            if (day > maxD) return;
             const dutyVal = String(row[colIdx] || '').trim();
             if (!dutyVal || dutyVal === '0') return;
             const duty = parseDutyCellValue(dutyVal);
+            let rank = 1;
             if (duty.shiftType === 'libur') {
               dailyGroups.get(day)?.libur.push(guardName);
-              return; // Petugas libur TIDAK dimasukan ke dalam penjagaan
+              rank = 5;
             } else if (duty.shiftType === 'rumdin') {
               dailyGroups.get(day)?.rumdin.push(guardName);
+              rank = 4;
             } else if (duty.shiftType === 'evening') {
               dailyGroups.get(day)?.evening.push(guardName);
+              rank = 2;
             } else if (duty.shiftType === 'night') {
               dailyGroups.get(day)?.night.push(guardName);
+              rank = 3;
             } else {
               dailyGroups.get(day)?.morning.push(guardName);
+              rank = 1;
             }
             const loc = duty.location;
-            const hrs = duty.hours;
-            const dObj = new Date(targetYear, targetMonth - 1, day);
-            const dayStr = `${ID_DAYS_UPPER[dObj.getDay()]}/ ${day} ${ID_MONTHS_TITLE[targetMonth - 1]} ${targetYear}`;
-            parsedRoster.push({
-              id: `ros-cal-${day}-${guardName}-${rowOrder++}`,
-              orderIndex: rowOrder,
-              name: guardName,
-              dateStr: dayStr,
-              location: loc,
-              hours: hrs
+            const hrs = duty.shiftType === 'libur' ? '-' : (/\d{1,2}[\.:]\d{2}/.test(dutyVal) ? dutyVal : duty.hours);
+            const dObj = new Date(effY, effM - 1, day);
+            const dayStr = `${ID_DAYS_UPPER[dObj.getDay()]}/ ${day} ${ID_MONTHS_TITLE[effM - 1]} ${effY}`;
+            tempCalItems.push({
+              day,
+              rank,
+              item: {
+                id: `ros-cal-${day}-${safeCalNameSlug}-${rowOrder++}`,
+                orderIndex: 0,
+                name: guardName,
+                dateStr: dayStr,
+                location: loc,
+                hours: hrs
+              }
             });
           });
         }
+        tempCalItems.sort((a, b) => (a.day !== b.day ? a.day - b.day : a.rank - b.rank));
+        tempCalItems.forEach((entry, idx) => {
+          parsedRoster.push({ ...entry.item, orderIndex: idx });
+        });
         dailyGroups.forEach((grp, day) => {
+          const hasAny = grp.morning.length > 0 || grp.evening.length > 0 || grp.night.length > 0 || grp.rumdin.length > 0 || grp.libur.length > 0;
+          if (!hasAny) return;
           const dObj = new Date(targetYear, targetMonth - 1, day);
           const dayStr = `${ID_DAYS_UPPER[dObj.getDay()]}/ ${day} ${ID_MONTHS_TITLE[targetMonth - 1]} ${targetYear}`;
           parsedShifts.push({
             day: dayStr,
             shiftMorning: grp.morning.join(' / ') || '-',
             shiftEvening: grp.evening.join(' / ') || '-',
-            shiftNight: [...grp.night, ...grp.rumdin].join(' / ') || '-'
+            shiftNight: [...grp.night, ...grp.rumdin.map(r => `${r} (Rumdin)`)].join(' / ') || '-'
           });
         });
       } else if (isGuardColsFormat) {
-        // FORMAT B
-        let colDate = colMatrixDay !== -1 ? colMatrixDay : 0;
+        // FORMAT B: Columns = Guard Names, Rows = Dates
+        setPreviewFormatLabel('Matriks Kolom Petugas (Baris = Tanggal, Kolom = Nama Petugas)');
+        setPreviewTabularMap(null);
+        const colDate = colMatrixDay !== -1 ? colMatrixDay : 0;
         let lastActiveDate = '';
-        for (let i = headerRowIdx + 1; i < rawRows.length; i++) {
+        let lastActiveDay = '';
+        for (let i = dataStartRowIdx; i < rawRows.length; i++) {
           const row = rawRows[i];
           if (!row || row.length === 0) continue;
+          const rowText = row.map(c => String(c || '').trim()).join(' ');
+          if (/^\s*(MENGETAHUI|PEKANBARU\s*,|DITETAPKAN|KASUBBAG|KEPALA\s+(BAGIAN|KANTOR)|NIP[\s:\.]*\d)/i.test(rowText)) break;
           let dateRaw = row[colDate] !== undefined ? String(row[colDate]).trim() : '';
+          let dayRaw = colMatrixDayOnly !== -1 && row[colMatrixDayOnly] !== undefined ? String(row[colMatrixDayOnly]).trim() : '';
           if (!dateRaw && lastActiveDate) {
             dateRaw = lastActiveDate;
           } else if (dateRaw) {
             lastActiveDate = dateRaw;
           }
-          if (!dateRaw || /TOTAL|MENGETAHUI|CATATAN/i.test(dateRaw)) continue;
-          const formattedDate = formatStandardDateStr(dateRaw, targetMonth, targetYear) || dateRaw;
+          if (dayRaw) lastActiveDay = dayRaw;
+          else if (lastActiveDay) dayRaw = lastActiveDay;
+          if (!dateRaw || /TOTAL|MENGETAHUI|CATATAN|KETERANGAN/i.test(dateRaw)) continue;
+          const combinedDate = (dayRaw && !dateRaw.toUpperCase().includes(dayRaw.toUpperCase())) ? `${dayRaw}/ ${dateRaw}` : dateRaw;
+          const formattedDate = formatStandardDateStr(combinedDate, targetMonth, targetYear, preferMonthFirst) || combinedDate;
           const morningNames: string[] = [];
           const eveningNames: string[] = [];
           const nightNames: string[] = [];
           const rumdinNames: string[] = [];
           guardCols.forEach(({ colIdx, name }) => {
             const cellVal = String(row[colIdx] || '').trim();
-            if (!cellVal || cellVal === '-' || cellVal === '0') return;
+            if (!cellVal || cellVal === '0') return;
             const duty = parseDutyCellValue(cellVal);
             if (duty.shiftType === 'libur') {
-              return; // Personil libur tidak dimasukan ke dalam penjagaan
+              if (cellVal === '-') return;
             } else if (duty.shiftType === 'rumdin') {
               rumdinNames.push(name);
             } else if (duty.shiftType === 'evening') {
@@ -1638,39 +2114,49 @@ export default function SecurityGuardSection({
             } else {
               morningNames.push(name);
             }
+            const hrs = duty.shiftType === 'libur' ? '-' : (/\d{1,2}[\.:]\d{2}/.test(cellVal) ? cellVal : duty.hours);
             parsedRoster.push({
               id: `ros-gc-${rowOrder}-${Date.now()}`,
               orderIndex: rowOrder++,
               name: name,
               dateStr: formattedDate,
               location: duty.location,
-              hours: duty.hours
+              hours: hrs
             });
           });
           parsedShifts.push({
             day: formattedDate,
             shiftMorning: morningNames.join(' / ') || '-',
             shiftEvening: eveningNames.join(' / ') || '-',
-            shiftNight: [...nightNames, ...rumdinNames].join(' / ') || '-'
+            shiftNight: [...nightNames, ...rumdinNames.map(r => `${r} (Rumdin)`)].join(' / ') || '-'
           });
         }
       } else if (isShiftMatrixFormat) {
-        // FORMAT A
+        // FORMAT A: Shift Matrix (Columns = Shift Pagi, Sore, Malam, Rumdin, Libur)
+        setPreviewFormatLabel('Matriks Shift Harian (Kolom = Shift Pagi / Malam / Rumdin / Libur)');
+        setPreviewTabularMap(null);
         let lastActiveDate = '';
+        let lastActiveDay = '';
         if (colMatrixDay === -1) {
           colMatrixDay = (headerRow[0] && !headerRow[0].toUpperCase().includes('SHIFT')) ? 0 : 1;
         }
-        for (let i = headerRowIdx + 1; i < rawRows.length; i++) {
+        for (let i = dataStartRowIdx; i < rawRows.length; i++) {
           const row = rawRows[i];
           if (!row || row.length === 0) continue;
+          const rowText = row.map(c => String(c || '').trim()).join(' ');
+          if (/^\s*(MENGETAHUI|PEKANBARU\s*,|DITETAPKAN|KASUBBAG|KEPALA\s+(BAGIAN|KANTOR)|NIP[\s:\.]*\d)/i.test(rowText)) break;
           let dateRaw = row[colMatrixDay] !== undefined ? String(row[colMatrixDay]).trim() : '';
+          let dayRaw = colMatrixDayOnly !== -1 && row[colMatrixDayOnly] !== undefined ? String(row[colMatrixDayOnly]).trim() : '';
           if (!dateRaw && lastActiveDate) {
             dateRaw = lastActiveDate;
           } else if (dateRaw) {
             lastActiveDate = dateRaw;
           }
-          if (!dateRaw || /^(HARI|TANGGAL|TOTAL|MENGETAHUI|CATATAN)/i.test(dateRaw)) continue;
-          const formattedDate = formatStandardDateStr(dateRaw, targetMonth, targetYear) || dateRaw;
+          if (dayRaw) lastActiveDay = dayRaw;
+          else if (lastActiveDay) dayRaw = lastActiveDay;
+          if (!dateRaw || /^(HARI|TANGGAL|TOTAL|MENGETAHUI|CATATAN|KETERANGAN)/i.test(dateRaw)) continue;
+          const combinedDate = (dayRaw && !dateRaw.toUpperCase().includes(dayRaw.toUpperCase())) ? `${dayRaw}/ ${dateRaw}` : dateRaw;
+          const formattedDate = formatStandardDateStr(combinedDate, targetMonth, targetYear, preferMonthFirst) || combinedDate;
 
           const extractNamesFromCols = (cols: number[]) => {
             const res: string[] = [];
@@ -1678,245 +2164,330 @@ export default function SecurityGuardSection({
               if (cIdx === -1 || row[cIdx] === undefined) return;
               const raw = String(row[cIdx]).trim();
               if (!raw || raw === '-' || raw === '0' || raw.toUpperCase() === 'LIBUR' || raw.toUpperCase() === 'OFF') return;
-              const split = raw
-                .replace(/(\d+[\.\-\)])/g, '\n$1')
-                .split(/[\/\n\r,&;]| dan | DAN /)
-                .map(n => n.trim().replace(/^\d+[\.\-\)]\s*/, ''))
-                .filter(n => n.length > 1 && !/^(SHIFT|POS|PAGI|MALAM|SORE|LIBUR|OFF|-)$/i.test(n));
+              const split = splitMultipleGuardNames(raw);
               res.push(...split);
             });
             return res;
+          };
+
+          const extractHeaderTime = (cols: number[], defaultHours: string): string => {
+            for (const cIdx of cols) {
+              const hdr = headerRow[cIdx] || '';
+              const m = hdr.match(/(\d{1,2}[\.:]\d{2}\s*[\/\-\–\s]+\s*\d{1,2}[\.:]\d{2})/);
+              if (m) return m[1].trim();
+            }
+            return defaultHours;
           };
 
           const morningNames = extractNamesFromCols(morningCols);
           const eveningNames = extractNamesFromCols(eveningCols);
           const nightNames = extractNamesFromCols(nightCols);
           const rumdinNames = extractNamesFromCols(rumdinCols);
+          const liburNames = extractNamesFromCols(liburCols);
+
+          const morningHrs = extractHeaderTime(morningCols, '06.00 / 18.00');
+          const eveningHrs = extractHeaderTime(eveningCols, '14.00 / 22.00');
+          const nightHrs = extractHeaderTime(nightCols, '18.00 / 06.00');
+          const rumdinHrs = extractHeaderTime(rumdinCols, '18.00 / 06.00');
 
           morningNames.forEach(n => {
             parsedRoster.push({
               id: `ros-mat-${rowOrder}-${Date.now()}`,
               orderIndex: rowOrder++,
-              name: normalizeGuardName(n),
+              name: n.trim().replace(/\s+/g, ' '),
               dateStr: formattedDate,
               location: 'KANWIL DJPB',
-              hours: '06.00/18.00'
+              hours: morningHrs
             });
           });
           eveningNames.forEach(n => {
             parsedRoster.push({
               id: `ros-mat-${rowOrder}-${Date.now()}`,
               orderIndex: rowOrder++,
-              name: normalizeGuardName(n),
+              name: n.trim().replace(/\s+/g, ' '),
               dateStr: formattedDate,
               location: 'KANWIL DJPB',
-              hours: '14.00/22.00'
+              hours: eveningHrs
             });
           });
           nightNames.forEach(n => {
             parsedRoster.push({
               id: `ros-mat-${rowOrder}-${Date.now()}`,
               orderIndex: rowOrder++,
-              name: normalizeGuardName(n),
+              name: n.trim().replace(/\s+/g, ' '),
               dateStr: formattedDate,
               location: 'KANWIL DJPB',
-              hours: '18.00/06.00'
+              hours: nightHrs
             });
           });
           rumdinNames.forEach(n => {
             parsedRoster.push({
               id: `ros-mat-${rowOrder}-${Date.now()}`,
               orderIndex: rowOrder++,
-              name: normalizeGuardName(n),
+              name: n.trim().replace(/\s+/g, ' '),
               dateStr: formattedDate,
               location: 'RUMAH DINAS',
-              hours: '18.00/06.00'
+              hours: rumdinHrs
+            });
+          });
+          liburNames.forEach(n => {
+            parsedRoster.push({
+              id: `ros-mat-${rowOrder}-${Date.now()}`,
+              orderIndex: rowOrder++,
+              name: n.trim().replace(/\s+/g, ' '),
+              dateStr: formattedDate,
+              location: 'LIBUR',
+              hours: '-'
             });
           });
           parsedShifts.push({
             day: formattedDate,
-            shiftMorning: morningNames.map(normalizeGuardName).join(' / ') || '-',
-            shiftEvening: eveningNames.map(normalizeGuardName).join(' / ') || '-',
-            shiftNight: [...nightNames, ...rumdinNames].map(normalizeGuardName).join(' / ') || '-'
+            shiftMorning: morningNames.join(' / ') || '-',
+            shiftEvening: eveningNames.join(' / ') || '-',
+            shiftNight: [...nightNames, ...rumdinNames.map(r => `${r} (Rumdin)`)].join(' / ') || '-'
           });
         }
       } else {
-        // FORMAT D: Tabular
-        let colNo = -1, colName = -1, colDay = -1, colDate = -1, colLoc = -1, colHours = -1;
-        headerRow.forEach((h, colIdx) => {
-          const hUp = h.toUpperCase();
-          if (colNo === -1 && (hUp === 'NO' || hUp === 'NO.' || hUp === 'NOMOR' || hUp.startsWith('NO '))) colNo = colIdx;
-          else if (colName === -1 && (hUp.includes('NAMA') || hUp.includes('PETUGAS') || hUp.includes('PERSONIL') || hUp.includes('SATPAM') || hUp.includes('SECURITY') || hUp.includes('ANGGOTA'))) colName = colIdx;
-          else if (hUp.includes('HARI') && (hUp.includes('TANGGAL') || hUp.includes('TGL') || hUp.includes('DATE'))) { if (colDate === -1) colDate = colIdx; }
-          else if (hUp.includes('TANGGAL') || hUp.includes('TGL') || hUp.includes('DATE') || hUp.includes('WAKTU/TGL')) { if (colDate === -1) colDate = colIdx; }
-          else if (hUp.includes('HARI') || hUp.includes('DAY')) { if (colDay === -1) colDay = colIdx; }
-          else if (colLoc === -1 && (hUp.includes('LOKASI') || hUp.includes('POS') || hUp.includes('PENEMPATAN') || hUp.includes('TEMPAT') || hUp.includes('STATUS'))) colLoc = colIdx;
-          else if (colHours === -1 && (hUp.includes('JAM') || hUp.includes('HADIR') || hUp.includes('PUKUL') || hUp.includes('WAKTU') || hUp.includes('SHIFT') || hUp.includes('HOURS'))) colHours = colIdx;
-        });
+        // FORMAT D: Tabular (NAMA, HARI / TANGGAL, LOKASI, JAM HADIR)
+        setPreviewFormatLabel('Tabel Roster Harian (Nama, Hari / Tanggal, Lokasi, Jam Hadir)');
+        let colNo = -1, colName = -1, colDay = -1, colDate = -1, colLoc = -1, colHours = -1, colHoursEnd = -1, colNotes = -1;
 
-        const sampleRows = rawRows.slice(headerRowIdx + 1, headerRowIdx + 30).filter(r => r && r.length > 0);
-        const maxCols = Math.max(...sampleRows.map(r => r.length), 5);
+        if (colMapOverride) {
+          colName = colMapOverride.name;
+          colDate = colMapOverride.date;
+          colLoc = colMapOverride.loc;
+          colHours = colMapOverride.hours;
+        } else {
+          // Pass 1: match primary explicit headers
+          headerRow.forEach((h, colIdx) => {
+            const hUp = h.toUpperCase();
+            const isLocWord = hUp.includes('LOKASI') || hUp.includes('POS') || hUp.includes('PENEMPATAN') || hUp.includes('TEMPAT') || hUp.includes('GEDUNG') || hUp.includes('UNIT') || hUp.includes('SHIFT');
+            const isEndTimeWord = hUp.includes('PULANG') || hUp.includes('KELUAR') || hUp.includes('SELESAI') || hUp.includes('SAMPAI') || hUp.includes('AKHIR');
+            if (colNo === -1 && /^(NO\.?(\s+URUT)?|NOMOR)$/i.test(hUp)) colNo = colIdx;
+            else if (colName === -1 && !isLocWord && (hUp.includes('NAMA') || hUp.includes('PETUGAS') || hUp.includes('PERSONIL') || hUp.includes('PERSONEL') || hUp.includes('SATPAM') || hUp.includes('SECURITY') || hUp.includes('ANGGOTA'))) colName = colIdx;
+            else if (hUp.includes('HARI') && (hUp.includes('TANGGAL') || hUp.includes('TGL') || hUp.includes('DATE'))) { if (colDate === -1) colDate = colIdx; }
+            else if (hUp.includes('TANGGAL') || hUp.includes('TGL') || hUp.includes('DATE') || hUp.includes('WAKTU/TGL')) { if (colDate === -1) colDate = colIdx; }
+            else if (hUp.includes('HARI') || hUp.includes('DAY')) { if (colDay === -1) colDay = colIdx; }
+            else if (colLoc === -1 && (hUp.includes('LOKASI') || hUp.includes('POS') || hUp.includes('PENEMPATAN') || hUp.includes('TEMPAT') || hUp.includes('AREA') || hUp.includes('GEDUNG') || hUp.includes('UNIT'))) colLoc = colIdx;
+            else if (colHours === -1 && !isEndTimeWord && (hUp.includes('JAM') || hUp.includes('HADIR') || hUp.includes('PUKUL') || hUp.includes('HOURS') || hUp.includes('MASUK') || hUp.includes('DATANG') || hUp.includes('MULAI'))) colHours = colIdx;
+            else if (colHours !== -1 && colHoursEnd === -1 && (isEndTimeWord || (colIdx === colHours + 1 && headerRowIdx >= 0 && rowHasMerge.has(`${headerRowIdx}:${colIdx}`) && hUp === (headerRow[colHours] || '').toUpperCase()))) colHoursEnd = colIdx;
+            else if (colNotes === -1 && (hUp.includes('KETERANGAN') || hUp === 'KET' || hUp === 'KET.' || hUp.includes('CATATAN'))) colNotes = colIdx;
+          });
+          // Pass 2: fallback secondary headers (STATUS, WAKTU, SHIFT) only if primary wasn't matched
+          headerRow.forEach((h, colIdx) => {
+            const hUp = h.toUpperCase();
+            if ([colNo, colName, colDate, colDay, colLoc, colHours, colHoursEnd, colNotes].includes(colIdx)) return;
+            if (colLoc === -1 && hUp.includes('STATUS')) colLoc = colIdx;
+            else if (colHours === -1 && (hUp.includes('WAKTU') || hUp.includes('SHIFT'))) colHours = colIdx;
+            else if (colHours !== -1 && colHoursEnd === -1 && colIdx === colHours + 1 && headerRowIdx >= 0 && rowHasMerge.has(`${headerRowIdx}:${colIdx}`) && hUp === (headerRow[colHours] || '').toUpperCase()) colHoursEnd = colIdx;
+          });
 
-        for (let c = 0; c < maxCols; c++) {
-          if (c === colNo) continue;
-          const vals = sampleRows.map(r => String(r[c] || '').trim()).filter(Boolean);
-          if (vals.length === 0) continue;
-          if (colName === -1 && vals.filter(v => OFFICIAL_SECURITY_GUARDS.some(g => v.toUpperCase().includes(g))).length >= 2) {
-            colName = c; continue;
+          const sampleRows = rawRows.slice(dataStartRowIdx, dataStartRowIdx + 30).filter(r => r && r.some(c => String(c || '').trim()));
+          const maxCols = Math.max(...sampleRows.map(r => r.length), headerRow.length, 4);
+
+          for (let c = 0; c < maxCols; c++) {
+            if (c === colNo || c === colNotes) continue;
+            const vals = sampleRows.map(r => String(r[c] || '').trim()).filter(Boolean);
+            if (vals.length === 0) continue;
+            if (colNo === -1 && vals.length >= 3 && vals.every(v => /^\d{1,3}\.?$/.test(v))) {
+              colNo = c; continue;
+            }
+            if (colName === -1 && vals.filter(v => OFFICIAL_SECURITY_GUARDS.some(g => v.toUpperCase().includes(g))).length >= 2) {
+              colName = c; continue;
+            }
+            if (colDate === -1 && vals.filter(v => /SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU|\d{1,2}\s*(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Nop|Des)|\d{1,2}[\/\-]\d{1,2}/i.test(v)).length >= 2) {
+              colDate = c; continue;
+            }
+            if (colLoc === -1 && vals.filter(v => /KANWIL|RUMAH|RUMDIN|LIBUR|\bOFF\b|\bLEPAS\b|GEDUNG|POS/i.test(v.toUpperCase())).length >= 2) {
+              colLoc = c; continue;
+            }
+            if (colHours === -1 && vals.filter(v => /\d{1,2}[\.:]\d{2}/.test(v) || /^\s*(0?6|14|18)\s*$/.test(v) || /^(pagi|malam|sore|shift\s*[123i]+)$/i.test(v)).length >= 2) {
+              colHours = c; continue;
+            }
           }
-          if (colHours === -1 && vals.filter(v => /\d{1,2}[\.:]\d{2}/.test(v) || /06|18|14/i.test(v) || /pagi|malam|sore/i.test(v)).length >= 2) {
-            colHours = c; continue;
+
+          const assignedCols = new Set([colNo, colName, colDate, colDay, colLoc, colHours, colHoursEnd, colNotes].filter(c => c !== -1));
+          const unassignedCols: number[] = [];
+          for (let c = 0; c < maxCols; c++) {
+            if (assignedCols.has(c)) continue;
+            const hUp = (headerRow[c] || '').toUpperCase();
+            if (/\b(KETERANGAN|CATATAN|PARAF|TTD|NIP|JABATAN)\b/.test(hUp)) continue;
+            const hasData = sampleRows.some(r => String(r[c] || '').trim() !== '');
+            if (hasData) unassignedCols.push(c);
           }
-          if (colLoc === -1 && vals.filter(v => /KANWIL|RUMAH|RUMDIN|LIBUR|OFF|LEPAS|GEDUNG/i.test(v.toUpperCase())).length >= 2) {
-            colLoc = c; continue;
-          }
-          if (colDate === -1 && vals.filter(v => /SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU|\d{1,2}\s+(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des)|\d{1,2}[\/\.\-]\d{1,2}/i.test(v)).length >= 2) {
-            colDate = c; continue;
-          }
+          if (colDate === -1 && colDay !== -1) { colDate = colDay; colDay = -1; }
+          if (colName === -1 && unassignedCols.length > 0) colName = unassignedCols.shift()!;
+          if (colDate === -1 && unassignedCols.length > 0) colDate = unassignedCols.shift()!;
+          if (colLoc === -1 && unassignedCols.length > 0) colLoc = unassignedCols.shift()!;
+          if (colHours === -1 && unassignedCols.length > 0) colHours = unassignedCols.shift()!;
         }
 
-        const assignedCols = new Set([colNo, colName, colDate, colDay, colLoc, colHours].filter(c => c !== -1));
-        const unassignedCols = [];
-        for (let c = 0; c < maxCols; c++) {
-          if (!assignedCols.has(c)) unassignedCols.push(c);
+        const totalColsFound = Math.max(headerRow.length, ...(rawRows.slice(dataStartRowIdx, dataStartRowIdx + 15).map(r => r?.length || 0)), 4);
+        const colOptionsList: { idx: number; label: string }[] = [];
+        for (let c = 0; c < totalColsFound; c++) {
+          const hdrLabel = headerRow[c] || `Kolom ${c + 1}`;
+          colOptionsList.push({ idx: c, label: `${XLSX.utils.encode_col(c)}: ${hdrLabel}` });
         }
-        if (colDate === -1 && colDay !== -1) colDate = colDay;
-        if (colName === -1 && unassignedCols.length > 0) colName = unassignedCols.shift()!;
-        if (colDate === -1 && unassignedCols.length > 0) colDate = unassignedCols.shift()!;
-        if (colLoc === -1 && unassignedCols.length > 0) colLoc = unassignedCols.shift()!;
-        if (colHours === -1 && unassignedCols.length > 0) colHours = unassignedCols.shift()!;
+        setPreviewColOptions(colOptionsList);
+        setPreviewTabularMap({ name: colName, date: colDate, loc: colLoc, hours: colHours });
 
         let lastActiveDate = '';
         let lastActiveDay = '';
         let lastActiveHoursForDay = '';
         let lastActiveLocForDay = '';
+        let dayBlockSawLibur = false;
+        const dayBlockGuards = new Set<string>();
 
-        for (let i = headerRowIdx + 1; i < rawRows.length; i++) {
+        for (let i = dataStartRowIdx; i < rawRows.length; i++) {
           const row = rawRows[i];
           if (!row || row.length === 0) continue;
+
+          const joinedRow = row.map(c => String(c || '').trim()).filter(Boolean).join(' ');
+          if (!joinedRow) continue;
 
           let nameRaw = colName !== -1 && row[colName] !== undefined ? String(row[colName]).trim() : '';
           let dateRaw = colDate !== -1 && row[colDate] !== undefined ? String(row[colDate]).trim() : '';
           let dayRaw = colDay !== -1 && colDay !== colDate && row[colDay] !== undefined ? String(row[colDay]).trim() : '';
           let locRaw = colLoc !== -1 && row[colLoc] !== undefined ? String(row[colLoc]).trim() : '';
           let hoursRaw = colHours !== -1 && row[colHours] !== undefined ? String(row[colHours]).trim() : '';
+          const notesRaw = colNotes !== -1 && row[colNotes] !== undefined ? String(row[colNotes]).trim() : '';
+          const hoursEndRaw = colHoursEnd !== -1 && row[colHoursEnd] !== undefined ? String(row[colHoursEnd]).trim() : '';
+          if (hoursRaw && hoursEndRaw && !hoursRaw.includes(hoursEndRaw)) {
+            hoursRaw = `${hoursRaw} / ${hoursEndRaw}`;
+          }
+
+          // Detect Excel signature/footer or recap summary blocks so trailing text never leaks into the last day
+          const FOOTER_BLOCK_RE = /^\s*(MENGETAHUI|PEKANBARU\s*,|DITETAPKAN\s+DI|KASUBBAG|KEPALA\s+(BAGIAN|KANTOR|SUBBAGIAN)|NIP[\s:\.]*\d|REKAPITULASI|RINGKASAN|JUMLAH\s+(SHIFT|KEHADIRAN|HARI|PIKET)|TOTAL\s+(SHIFT|KEHADIRAN|HARI|PIKET)|CATATAN\s*:|KETERANGAN\s*:|LEGENDA\s*:|DISUSUN\s+OLEH|DISETUJUI\s+OLEH|MENYETUJUI)/i;
+          if ((!nameRaw && FOOTER_BLOCK_RE.test(joinedRow)) || FOOTER_BLOCK_RE.test(nameRaw)) {
+            break;
+          }
 
           nameRaw = nameRaw.replace(/^\d+[\.\-\)]\s*/, '').trim();
 
           // Reconcile reversed columns between location and hours if needed
-          if (/KANWIL|RUMAH|RUMDIN|LIBUR|OFF|LEPAS|POS|GEDUNG/i.test(hoursRaw) && (/\d{1,2}[\.:]\d{2}/.test(locRaw) || locRaw === '-')) {
+          if (/KANWIL|RUMAH|RUMDIN|LIBUR|\bOFF\b|\bLEPAS\b|POS|GEDUNG/i.test(hoursRaw) && (/\d{1,2}[\.:]\d{2}/.test(locRaw) || locRaw === '-')) {
             const temp = locRaw; locRaw = hoursRaw; hoursRaw = temp;
-          } else if ((!hoursRaw || hoursRaw === '-') && (/\d{1,2}[\.:]\d{2}/.test(locRaw) || /0?6[\.:]|18[\.:]|14[\.:]|pagi|malam|sore/i.test(locRaw))) {
+          } else if ((!hoursRaw || hoursRaw === '-') && /\d{1,2}[\.:]\d{2}/.test(locRaw) && !/KANWIL|RUMAH|RUMDIN|LIBUR/i.test(locRaw)) {
             hoursRaw = locRaw; locRaw = 'KANWIL DJPB';
           }
 
           // Reconcile reversed columns between date and name
-          const isNameActuallyDate = /^(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU|\d{1,2}[\/\.\-]\d{1,2}|\d{1,2}\s+(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des))/i.test(nameRaw);
-          const isDateActuallyDate = /^(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU|\d{1,2}[\/\.\-]\d{1,2}|\d{1,2}\s+(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Des))/i.test(dateRaw);
+          const isNameActuallyDate = /^(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU|\d{1,2}[\/\-]\d{1,2}|\d{1,2}\s*(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Nop|Des))/i.test(nameRaw);
+          const isDateActuallyDate = /^(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU|\d{1,2}[\/\-]\d{1,2}|\d{1,2}\s*(Jan|Feb|Mar|Apr|Mei|Jun|Jul|Agu|Sep|Okt|Nov|Nop|Des))/i.test(dateRaw);
           if (isNameActuallyDate && !isDateActuallyDate) {
             const temp = nameRaw; nameRaw = dateRaw; dateRaw = temp;
           }
 
-          // Scan for hours in row if still empty
-          if (!hoursRaw || (!/\d{1,2}[\.:]\d{2}/.test(hoursRaw) && hoursRaw !== '-' && !/pagi|malam|sore/i.test(hoursRaw))) {
-            for (let c = 0; c < row.length; c++) {
-              if (c === colName || c === colDate || c === colDay) continue;
-              const cell = String(row[c] || '').trim();
-              if (/\d{1,2}[\.:]\d{2}/.test(cell) || /06\.00|18\.00|14\.00/i.test(cell) || /pagi|malam|sore/i.test(cell)) {
-                hoursRaw = cell; break;
+          const upName = nameRaw.toUpperCase();
+          if (!nameRaw || /^(NAMA(\s+(PETUGAS|SATPAM|PERSONIL|PERSONEL|SECURITY|ANGGOTA|LENGKAP))?|PETUGAS|PERSONIL|PERSONEL|SATPAM|JADWAL|TOTAL|MENGETAHUI|CATATAN|BAGIAN|KETERANGAN|NO\.?)$/i.test(upName)) {
+            continue;
+          }
+
+          // Skip placeholder name rows
+          if (upName === 'LIBUR' || upName === 'OFF' || upName === 'LEPAS' || upName === '-' || upName === '0') {
+            continue;
+          }
+
+          // Look ahead up to 5 rows for unmerged/centered dates on Day 1 OR right after a completed day block (e.g. after LIBUR / repeated guard)
+          if (!dateRaw && colDate !== -1 && (!lastActiveDate || dayBlockSawLibur || dayBlockGuards.has(upName))) {
+            for (let look = i + 1; look <= Math.min(i + 5, rawRows.length - 1); look++) {
+              const candDate = String(rawRows[look]?.[colDate] || '').trim();
+              if (candDate && candDate !== lastActiveDate) {
+                dateRaw = candDate;
+                break;
               }
             }
           }
 
-          const upName = nameRaw.toUpperCase();
-          if (!nameRaw || upName === 'NAMA' || upName === 'NAMA PETUGAS' || /^(JADWAL|TOTAL|MENGETAHUI|CATATAN|BAGIAN)/i.test(upName)) {
-            continue;
-          }
-
-          const isNewDate = dateRaw && dateRaw !== lastActiveDate;
+          const isNewDate = Boolean(dateRaw && dateRaw !== lastActiveDate);
           if (dateRaw) lastActiveDate = dateRaw;
           else if (lastActiveDate) dateRaw = lastActiveDate;
 
           if (isNewDate) {
             lastActiveHoursForDay = '';
             lastActiveLocForDay = '';
+            lastActiveDay = '';
+            dayBlockSawLibur = false;
+            dayBlockGuards.clear();
           }
 
           if (dayRaw) lastActiveDay = dayRaw;
-          else if (lastActiveDay) dayRaw = lastActiveDay;
+          else if (!isNewDate && lastActiveDay) dayRaw = lastActiveDay;
 
           let rawDateCombined = dateRaw;
           if (dayRaw && !rawDateCombined.toUpperCase().includes(dayRaw.toUpperCase())) {
             rawDateCombined = `${dayRaw}/ ${rawDateCombined}`;
           }
 
-          let formattedDate = formatStandardDateStr(rawDateCombined || dateRaw || dayRaw, targetMonth, targetYear);
+          let formattedDate = formatStandardDateStr(rawDateCombined || dateRaw || dayRaw, targetMonth, targetYear, preferMonthFirst);
           if (!formattedDate) {
-            const dObj = new Date(targetYear, targetMonth - 1, 1);
-            formattedDate = `${ID_DAYS_UPPER[dObj.getDay()]}/ 1 ${ID_MONTHS_TITLE[targetMonth - 1]} ${targetYear}`;
+            formattedDate = rawDateCombined || dateRaw || dayRaw;
           }
 
-          // Skip rows belonging to other months
-          const dateMonthInfo = extractMonthAndYearFromText(formattedDate);
-          if (targetMonth === 10 && dateMonthInfo && dateMonthInfo.month !== 10) {
-            continue;
-          }
+          const upLocPre = locRaw.trim().toUpperCase();
+          const upHoursPre = hoursRaw.trim().toUpperCase();
+          const notesUp = notesRaw.toUpperCase().trim();
+          const notesIndicatesLibur =
+            /^(LIBUR|OFF|LEPAS|L)\b/i.test(notesUp) ||
+            ((upLocPre === '' || upLocPre === '-') && (upHoursPre === '' || upHoursPre === '-') && /\b(LIBUR|OFF|LEPAS)\b/.test(notesUp));
 
-          if (!hoursRaw && lastActiveHoursForDay) hoursRaw = lastActiveHoursForDay;
-          if (!locRaw && lastActiveLocForDay) locRaw = lastActiveLocForDay;
+          // Continuation row inheritance (works even when HARI/TANGGAL is vertically merged across the day!)
+          if (!isNewDate && !notesIndicatesLibur && hoursRaw !== '-' && locRaw !== '-') {
+            if (!locRaw && !hoursRaw && lastActiveLocForDay && lastActiveHoursForDay) {
+              locRaw = lastActiveLocForDay;
+              hoursRaw = lastActiveHoursForDay;
+            } else if (locRaw && !hoursRaw && locRaw.toUpperCase() === lastActiveLocForDay && lastActiveHoursForDay) {
+              hoursRaw = lastActiveHoursForDay;
+            } else if (!locRaw && hoursRaw && hoursRaw.trim() === lastActiveHoursForDay && lastActiveLocForDay) {
+              locRaw = lastActiveLocForDay;
+            }
+          }
 
           const upLoc = locRaw.trim().toUpperCase();
           const upHours = hoursRaw.trim().toUpperCase();
 
-          // Skip only if officer name cell is literally a blank/placeholder string
-          const isNamePlaceholder = upName === 'LIBUR' || upName === 'OFF' || upName === 'LEPAS' || upName === '-' || upName === '0';
-          if (isNamePlaceholder) {
-            continue;
-          }
+          const isLiburRow =
+            notesIndicatesLibur ||
+            upLoc === 'LIBUR' || upLoc === 'OFF' || upLoc === 'LEPAS' || upLoc === 'L' || upLoc.includes('LIBUR') ||
+            upHours === 'LIBUR' || upHours === 'OFF' || upHours === 'LEPAS' ||
+            ((upHours === '' || upHours === '-') && (upLoc === '' || upLoc === '-'));
 
-          let location = locRaw.toUpperCase();
-          const isLiburRow = 
-            upLoc.includes('LIBUR') || upLoc === 'OFF' || upLoc === 'LEPAS' || upLoc === 'L' ||
-            upHours.includes('LIBUR') || upHours.includes('OFF') || upHours.includes('LEPAS') ||
-            (upHours === '' && !upLoc.includes('KANWIL') && !upLoc.includes('RUMAH')) ||
-            (upHours === '-' && !upLoc.includes('KANWIL') && !upLoc.includes('RUMAH'));
+          let location = upLoc;
+          let finalHours = hoursRaw.trim();
 
-          if (isLiburRow || location.includes('LIBUR') || location === 'OFF' || location === 'LEPAS') {
+          if (isLiburRow) {
             location = 'LIBUR';
-            hoursRaw = '-';
-          } else if (location.includes('RUMAH') || location.includes('RUMDIN') || location.includes('JABATAN')) {
-            location = 'RUMAH DINAS';
-            hoursRaw = normalizeHours(hoursRaw, location) || '18.00/06.00';
+            finalHours = '-';
+            dayBlockSawLibur = true;
           } else {
-            location = 'KANWIL DJPB';
-            hoursRaw = normalizeHours(hoursRaw, location);
-            if (!hoursRaw || hoursRaw === '-') {
-              hoursRaw = '06.00/18.00';
-            }
+            if (!location) location = 'KANWIL DJPB';
+            finalHours = normalizeHours(finalHours, location);
+            if (!finalHours) finalHours = '-';
           }
+          dayBlockGuards.add(upName);
 
-          if (hoursRaw && hoursRaw !== '-' && location !== 'LIBUR') {
-            lastActiveHoursForDay = hoursRaw;
+          if (finalHours && finalHours !== '-' && location !== 'LIBUR') {
+            lastActiveHoursForDay = finalHours;
             lastActiveLocForDay = location;
           }
 
-          const names = (nameRaw.includes('/') || nameRaw.includes('\n') || nameRaw.includes('&') || / dan /i.test(nameRaw) || (nameRaw.includes(',') && !nameRaw.includes('SH') && !nameRaw.includes('SE')))
+          const hasAcademicDegree = /,\s*(S\.|M\.|A\.Md|SH|SE|ST|MM|AK)/i.test(nameRaw);
+          const names = (nameRaw.includes('/') || nameRaw.includes('\n') || nameRaw.includes('&') || / dan /i.test(nameRaw) || (nameRaw.includes(',') && !hasAcademicDegree))
             ? nameRaw.split(/[\/\n\r,&]| dan | DAN /).map(n => n.trim().replace(/^\d+[\.\-\)]\s*/, '')).filter(Boolean)
             : [nameRaw];
 
           for (const n of names) {
-            const nUp = n.trim().toUpperCase();
-            if (nUp === 'LIBUR' || nUp === 'OFF' || nUp === 'LEPAS' || nUp === '-' || nUp === '0') continue;
-            const cleanedName = normalizeGuardName(n);
-            if (!cleanedName || cleanedName === 'LIBUR' || cleanedName === 'OFF' || cleanedName === 'LEPAS') continue;
+            const cleanN = n.trim().replace(/\s+/g, ' ');
+            const nUp = cleanN.toUpperCase();
+            if (!cleanN || nUp === 'LIBUR' || nUp === 'OFF' || nUp === 'LEPAS' || nUp === '-' || nUp === '0') continue;
 
             parsedRoster.push({
               id: `ros-up-${rowOrder}-${Date.now()}`,
               orderIndex: rowOrder++,
-              name: cleanedName,
+              name: cleanN,
               dateStr: formattedDate,
               location: location,
-              hours: hoursRaw
+              hours: finalHours
             });
           }
         }
@@ -1930,7 +2501,7 @@ export default function SecurityGuardSection({
           const grp = dateGroupMap.get(d)!;
           if (item.location === 'LIBUR' || item.hours === '-') {
             grp.libur.push(item.name);
-          } else if (item.location === 'RUMAH DINAS') {
+          } else if (item.location.includes('RUMAH') || item.location.includes('RUMDIN')) {
             grp.rumdin.push(item.name);
           } else if (isMorningHours(item.hours, item.location)) {
             grp.morning.push(item.name);
@@ -1951,24 +2522,11 @@ export default function SecurityGuardSection({
         });
       }
 
-      // Deduplicate and filter out rogue months
+      // Remove only exact duplicate rows, keeping every Excel row verbatim in exact chronological/Excel order
       const deduplicated = deduplicateRoster(parsedRoster, targetMonth, targetYear);
-      let cleanForMonth = targetMonth === 10
-        ? deduplicated.filter(it => {
-            const dKey = normalizeDateKey(it.dateStr || '', 10, targetYear);
-            const isSep = dKey.startsWith('2026-09') || (it.dateStr || '').toLowerCase().includes('september');
-            const isAug = dKey.startsWith('2026-08') || (it.dateStr || '').toLowerCase().includes('agustus');
-            return !isSep && !isAug;
-          })
-        : deduplicated;
+      const cleanParsedRoster = sortRosterChronologically(deduplicated, targetMonth, targetYear);
 
-      if (targetMonth === 10) {
-        cleanForMonth = alignOctoberRosterToPattern(cleanForMonth);
-      }
-
-      const cleanParsedRoster = sortRosterChronologically(cleanForMonth);
-
-      // Re-synthesize parsedShifts so that preview modal Matrix Shift view also reflects both morning guards
+      // Synthesize Matrix Shift Data from exact parsed roster
       if (cleanParsedRoster.length > 0) {
         const dMap = new Map<string, { morning: string[]; evening: string[]; night: string[]; rumdin: string[] }>();
         cleanParsedRoster.forEach(it => {
@@ -1976,9 +2534,9 @@ export default function SecurityGuardSection({
           if (!d) return;
           if (!dMap.has(d)) dMap.set(d, { morning: [], evening: [], night: [], rumdin: [] });
           const grp = dMap.get(d)!;
-          if (it.location === 'LIBUR') {
-            // libur dikecualikan
-          } else if (it.location === 'RUMAH DINAS') {
+          if (it.location === 'LIBUR' || it.location.includes('LIBUR')) {
+            // libur dikecualikan dari kolom shift aktif
+          } else if (it.location.includes('RUMAH') || it.location.includes('RUMDIN')) {
             grp.rumdin.push(it.name);
           } else if (isMorningHours(it.hours, it.location)) {
             grp.morning.push(it.name);
@@ -2023,7 +2581,7 @@ export default function SecurityGuardSection({
     reader.onload = (evt) => {
       try {
         const buffer = evt.target?.result;
-        const wb = XLSX.read(buffer, { type: 'array' });
+        const wb = XLSX.read(buffer, { type: 'array', cellNF: true, cellDates: false });
         const sheetNames = wb.SheetNames;
         if (!sheetNames || sheetNames.length === 0) {
           alert('File Excel tidak memiliki lembar kerja (sheet).');
@@ -2036,47 +2594,80 @@ export default function SecurityGuardSection({
         // Detect month & year from filename first
         const fileMonthInfo = extractMonthAndYearFromText(file.name);
 
-        let bestSheetName = sheetNames[0];
+        const sheetRowCount = (sName: string) => {
+          const ws = wb.Sheets[sName];
+          if (!ws || !ws['!ref']) return 0;
+          const rng = XLSX.utils.decode_range(ws['!ref']);
+          return rng.e.r - rng.s.r + 1;
+        };
+
+        const isHiddenSheet = (sName: string) => {
+          const idx = sheetNames.indexOf(sName);
+          return idx !== -1 && Boolean(wb.Workbook?.Sheets?.[idx]?.Hidden);
+        };
+        const visibleSheets = sheetNames.filter(s => !isHiddenSheet(s));
+        const candidateSheets = visibleSheets.length > 0 ? visibleSheets : sheetNames;
+
+        // Smart sheet selection across visible sheets: match filename month -> keyword-named sheet with data -> largest sheet
+        let bestSheetName = candidateSheets[0];
+        if (sheetRowCount(bestSheetName) < 3) {
+          const nonEmptySheet = candidateSheets.find(s => sheetRowCount(s) >= 3);
+          if (nonEmptySheet) bestSheetName = nonEmptySheet;
+        }
+
+        if (fileMonthInfo) {
+          const matchingSheet = candidateSheets.find(s => {
+            const sInfo = extractMonthAndYearFromText(s);
+            return sInfo && sInfo.month === fileMonthInfo.month && sheetRowCount(s) >= 3;
+          });
+          if (matchingSheet) {
+            bestSheetName = matchingSheet;
+          }
+        } else {
+          const curMonth = new Date().getMonth() + 1;
+          const monthSheets = candidateSheets
+            .map(s => ({ name: s, info: extractMonthAndYearFromText(s), rows: sheetRowCount(s) }))
+            .filter(x => x.info !== null && x.rows >= 5);
+          const curMonthSheet = monthSheets.find(x => x.info!.month === curMonth);
+          const keywordSheet = candidateSheets.find(s =>
+            /(JADWAL|ROSTER|SECURITY|SATPAM|KEAMANAN|PENJAGAAN|PIKET|SHIFT)/i.test(s) && sheetRowCount(s) >= 5
+          );
+          if (curMonthSheet) {
+            bestSheetName = curMonthSheet.name;
+          } else if (monthSheets.length > 0) {
+            monthSheets.sort((a, b) => (b.info!.year * 12 + b.info!.month) - (a.info!.year * 12 + a.info!.month));
+            bestSheetName = monthSheets[0].name;
+          } else if (keywordSheet) {
+            bestSheetName = keywordSheet;
+          } else if (sheetRowCount(bestSheetName) < 10) {
+            const largest = [...candidateSheets].sort((a, b) => sheetRowCount(b) - sheetRowCount(a))[0];
+            if (largest && sheetRowCount(largest) > sheetRowCount(bestSheetName)) {
+              bestSheetName = largest;
+            }
+          }
+        }
+
         let detectedMonthFromSheets = -1;
         let detectedYearFromSheets = 2026;
-
-        // Check if any sheet name contains month matching filename or any explicit month
-        for (const sName of sheetNames) {
-          const sInfo = extractMonthAndYearFromText(sName);
-          if (sInfo) {
-            if (fileMonthInfo && sInfo.month === fileMonthInfo.month) {
-              bestSheetName = sName;
-              detectedMonthFromSheets = sInfo.month;
-              detectedYearFromSheets = sInfo.year;
+        const chosenTabInfo = extractMonthAndYearFromText(bestSheetName);
+        if (chosenTabInfo) {
+          detectedMonthFromSheets = chosenTabInfo.month;
+          detectedYearFromSheets = chosenTabInfo.year;
+        } else {
+          const ws = wb.Sheets[bestSheetName];
+          const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: false });
+          for (let r = 0; r < Math.min((rows || []).length, 15); r++) {
+            const rStr = ((rows || [])[r] || []).map(c => String(c || '')).join(' ');
+            const mInfo = extractMonthAndYearFromText(rStr);
+            if (mInfo) {
+              detectedMonthFromSheets = mInfo.month;
+              detectedYearFromSheets = mInfo.year;
               break;
-            } else if (detectedMonthFromSheets === -1) {
-              bestSheetName = sName;
-              detectedMonthFromSheets = sInfo.month;
-              detectedYearFromSheets = sInfo.year;
             }
           }
         }
 
-        // If sheet name had no month info, scan top rows of each sheet
-        if (detectedMonthFromSheets === -1) {
-          for (const sName of sheetNames) {
-            const ws = wb.Sheets[sName];
-            const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '', raw: false });
-            for (let r = 0; r < Math.min((rows || []).length, 10); r++) {
-              const rStr = ((rows || [])[r] || []).map(c => String(c || '')).join(' ');
-              const mInfo = extractMonthAndYearFromText(rStr);
-              if (mInfo) {
-                bestSheetName = sName;
-                detectedMonthFromSheets = mInfo.month;
-                detectedYearFromSheets = mInfo.year;
-                break;
-              }
-            }
-            if (detectedMonthFromSheets !== -1) break;
-          }
-        }
-
-        let targetMonth = fileMonthInfo?.month || (detectedMonthFromSheets !== -1 ? detectedMonthFromSheets : 11);
+        let targetMonth = fileMonthInfo?.month || (detectedMonthFromSheets !== -1 ? detectedMonthFromSheets : new Date().getMonth() + 1);
         let targetYear = fileMonthInfo?.year || (detectedMonthFromSheets !== -1 ? detectedYearFromSheets : 2026);
 
         parseWorkbookSheet(wb, bestSheetName, targetMonth, targetYear, file.name);
@@ -2089,145 +2680,225 @@ export default function SecurityGuardSection({
     e.target.value = '';
   };
 
-  // Apply Excel Data & Overwrite Previous Excel Completely with Strict Chronological Ordering
-  const handleApplyExcel = () => {
-    // Pastikan data yang diterapkan dari Excel bebas dari duplikasi & personil libur tidak dimasukan
-    const cleanedData = deduplicateRoster(previewRosterData, previewMonth, previewYear);
-    const readyData = (previewMonth === 10)
-      ? alignOctoberRosterToPattern(cleanedData)
-      : cleanedData;
-    const sortedData = sortRosterChronologically(readyData);
+  // Apply Excel Data & Overwrite Previous Excel Completely while preserving uploaded Excel rows verbatim
+  const handleApplyExcel = async () => {
+    if (isApplyingExcel) return;
+    setIsApplyingExcel(true);
 
-    // Bersihkan cache penghapusan lama agar seluruh baris baru Excel tampil sempurna tanpa tersembunyi
-    safeLocalStorageSet('melayu_deleted_security_roster_ids', JSON.stringify([]));
     try {
-      localStorage.removeItem('melayu_security_roster_cleared');
-    } catch (e) {}
+      const cleanedData = deduplicateRoster(previewRosterData, previewMonth, previewYear);
+      const sortedData = sortRosterChronologically(cleanedData, previewMonth, previewYear);
 
-    // Tandai bahwa jadwal telah diunggah resmi oleh administrator
-    safeLocalStorageSet('melayu_security_roster_custom_uploaded', 'true');
-    safeLocalStorageSet('melayu_security_roster_updated_at', String(Date.now()));
+      // Bersihkan cache penghapusan lama agar seluruh baris baru Excel tampil sempurna tanpa tersembunyi
+      safeLocalStorageSet('melayu_deleted_security_roster_ids', JSON.stringify([]));
+      try {
+        localStorage.removeItem('melayu_security_roster_cleared');
+        localStorage.removeItem('melayu_security_roster_user_modified');
+      } catch (e) {}
 
-    // Pastikan judul mencerminkan bulan yang diterapkan
-    let finalTitle = previewDocTitle;
-    if (previewMonth === 10 && finalTitle.toUpperCase().includes('SEPTEMBER')) {
-      finalTitle = finalTitle.replace(/BULAN\s+SEPTEMBER/gi, 'BULAN OKTOBER').replace(/\bSEPTEMBER\b/gi, 'OKTOBER');
-    }
+      // Tandai bahwa jadwal telah diunggah resmi oleh administrator
+      const applyTs = String(Date.now());
+      safeLocalStorageSet('melayu_security_roster_custom_uploaded', 'true');
+      safeLocalStorageSet('melayu_security_roster_updated_at', applyTs);
+      safeLocalStorageSet('melayu_security_shifts_custom_uploaded', 'true');
+      safeLocalStorageSet('melayu_security_shifts_updated_at', applyTs);
+      safeLocalStorageSet('melayu_security_config_custom_uploaded', 'true');
+      safeLocalStorageSet('melayu_security_config_updated_at', applyTs);
 
-    if (setSecurityRoster) {
-      setSecurityRoster(sortedData);
-      safeLocalStorageSet('melayu_security_roster', JSON.stringify(sortedData));
-      saveFirestoreCollection('security_roster', sortedData);
-    }
+      const finalTitle = previewDocTitle;
 
-    const finalShifts: SecurityShift[] = (previewMatrixData && previewMatrixData.length > 0) ? [...previewMatrixData] : [];
-    if (sortedData.length > 0) {
-      const dateMap = new Map<string, { morning: string[]; evening: string[]; night: string[]; rumdin: string[] }>();
-      sortedData.forEach(item => {
-        const d = item.dateStr || '';
-        if (!dateMap.has(d)) {
-          dateMap.set(d, { morning: [], evening: [], night: [], rumdin: [] });
-        }
-        const grp = dateMap.get(d)!;
-        if (item.location === 'LIBUR') {
-          // libur dikecualikan
-        } else if (item.location === 'RUMAH DINAS') {
-          grp.rumdin.push(item.name);
-        } else if (isMorningHours(item.hours, item.location)) {
-          grp.morning.push(item.name);
-        } else if (isEveningHours(item.hours, item.location)) {
-          grp.evening.push(item.name);
-        } else {
-          grp.night.push(item.name);
-        }
-      });
-      finalShifts.length = 0;
-      dateMap.forEach((grp, day) => {
-        finalShifts.push({
-          day,
-          shiftMorning: grp.morning.join(' / ') || '-',
-          shiftEvening: grp.evening.join(' / ') || '-',
-          shiftNight: [...grp.night, ...(grp.rumdin.map(r => `${r} (Rumdin)`))].join(' / ') || '-'
+      if (setSecurityRoster) {
+        setSecurityRoster(sortedData);
+        safeLocalStorageSet('melayu_security_roster', JSON.stringify(sortedData));
+      }
+
+      const finalShifts: SecurityShift[] = [];
+      if (sortedData.length > 0) {
+        const dateMap = new Map<string, { morning: string[]; evening: string[]; night: string[]; rumdin: string[] }>();
+        sortedData.forEach(item => {
+          const d = item.dateStr || '';
+          if (!dateMap.has(d)) {
+            dateMap.set(d, { morning: [], evening: [], night: [], rumdin: [] });
+          }
+          const grp = dateMap.get(d)!;
+          if (item.location === 'LIBUR' || item.location.includes('LIBUR')) {
+            // libur dikecualikan dari kolom shift aktif
+          } else if (item.location.includes('RUMAH') || item.location.includes('RUMDIN')) {
+            grp.rumdin.push(item.name);
+          } else if (isMorningHours(item.hours, item.location)) {
+            grp.morning.push(item.name);
+          } else if (isEveningHours(item.hours, item.location)) {
+            grp.evening.push(item.name);
+          } else {
+            grp.night.push(item.name);
+          }
         });
-      });
-    }
+        dateMap.forEach((grp, day) => {
+          finalShifts.push({
+            day,
+            shiftMorning: grp.morning.join(' / ') || '-',
+            shiftEvening: grp.evening.join(' / ') || '-',
+            shiftNight: [...grp.night, ...(grp.rumdin.map(r => `${r} (Rumdin)`))].join(' / ') || '-'
+          });
+        });
+      }
 
-    if (setSecurityShifts && finalShifts.length > 0) {
-      setSecurityShifts(finalShifts);
-      safeLocalStorageSet('melayu_security_shifts', JSON.stringify(finalShifts));
-      saveFirestoreCollection('security_shifts', finalShifts);
-    }
+      if (setSecurityShifts && finalShifts.length > 0) {
+        setSecurityShifts(finalShifts);
+        safeLocalStorageSet('melayu_security_shifts', JSON.stringify(finalShifts));
+      }
 
-    setDocTitle(finalTitle);
-    setDynamicHeaders(previewDocHeaders);
-    setPrintMonth(previewMonth);
-    setPrintYear(previewYear);
-    setDeleteTargetMonth(previewMonth);
-    setDeleteTargetYear(previewYear);
+      setDocTitle(finalTitle);
+      setDynamicHeaders(previewDocHeaders);
+      setPrintMonth(previewMonth);
+      setPrintYear(previewYear);
+      setDeleteTargetMonth(previewMonth);
+      setDeleteTargetYear(previewYear);
 
-    // Save title, headers and data to localStorage
-    safeLocalStorageSet('melayu_security_doc_title', finalTitle);
-    safeLocalStorageSet('melayu_security_doc_headers', JSON.stringify(previewDocHeaders));
+      safeLocalStorageSet('melayu_security_doc_title', finalTitle);
+      safeLocalStorageSet('melayu_security_doc_headers', JSON.stringify(previewDocHeaders));
+      safeLocalStorageSet('melayu_security_nov2026_preset_applied', 'true');
 
-    // Save to Firestore for permanent persistence across all PCs
-    saveFirestoreDoc('security_config', {
-      id: 'main',
-      docTitle: finalTitle,
-      dynamicHeaders: previewDocHeaders,
-      updatedAt: new Date().toISOString()
-    });
+      // Reset filter
+      setSearchQuery('');
+      setSelectedLocation('ALL');
+      setSelectedDate('ALL');
+      setShowPreviewModal(false);
 
-    // Reset filter
-    setSearchQuery('');
-    setSelectedLocation('ALL');
-    setSelectedDate('ALL');
+      // Force write to Firestore so stale local quota flags never drop explicit admin uploads
+      const [rosterSaved, shiftsSaved, cfgSaved] = await Promise.all([
+        saveFirestoreCollection('security_roster', sortedData, { force: true }),
+        finalShifts.length > 0
+          ? saveFirestoreCollection('security_shifts', finalShifts, { force: true })
+          : Promise.resolve(true),
+        saveFirestoreDoc('security_config', {
+          id: 'main',
+          docTitle: finalTitle,
+          dynamicHeaders: previewDocHeaders,
+          nov2026PresetApplied: true,
+          updatedAt: new Date().toISOString()
+        }, { force: true })
+      ]);
 
-    setSuccessNotice(
-      `BERHASIL MEMUAT DATA EXCEL! Menampilkan ${sortedData.length} baris jadwal pengawasan penjagaan keamanan dari file "${excelFileName}" sesuai dengan isi dokumen Excel yang diupload.`
-    );
-    setShowPreviewModal(false);
-    setTimeout(() => setSuccessNotice(''), 7000);
-  };
-
-  // Download Templates
-  // Download Templates matching exact structure in image.png (NAMA, HARI / TANGGAL, LOKASI, JAM HADIR)
-  const handleDownloadRosterTemplate = () => {
-    const templateRows: { 'NAMA': string; 'HARI / TANGGAL': string; 'LOKASI': string; 'JAM HADIR': string }[] = [];
-    
-    for (let day = 1; day <= 31; day++) {
-      const d = new Date(2026, 9, day);
-      const dayName = ID_DAYS_UPPER[d.getDay()];
-      const dateStr = `${dayName} / ${day} Oktober 2026`;
-      const rot = OCTOBER_DAILY_ROTATION[(day - 1) % 6];
-      
-      templateRows.push(
-        { 'NAMA': rot.morning[0], 'HARI / TANGGAL': dateStr, 'LOKASI': 'KANWIL DJPB', 'JAM HADIR': '06.00/18.00' },
-        { 'NAMA': rot.morning[1], 'HARI / TANGGAL': dateStr, 'LOKASI': 'KANWIL DJPB', 'JAM HADIR': '06.00/18.00' },
-        { 'NAMA': rot.night[0],   'HARI / TANGGAL': dateStr, 'LOKASI': 'KANWIL DJPB', 'JAM HADIR': '18.00/06.00' },
-        { 'NAMA': rot.night[1],   'HARI / TANGGAL': dateStr, 'LOKASI': 'KANWIL DJPB', 'JAM HADIR': '18.00/06.00' },
-        { 'NAMA': rot.rumdin,     'HARI / TANGGAL': dateStr, 'LOKASI': 'RUMAH DINAS', 'JAM HADIR': '18.00/06.00' },
-        { 'NAMA': rot.libur,      'HARI / TANGGAL': dateStr, 'LOKASI': 'LIBUR',       'JAM HADIR': '' }
+      const cloudOk = rosterSaved && shiftsSaved && cfgSaved;
+      setSuccessNotice(
+        cloudOk
+          ? `BERHASIL MEMUAT & MENYINKRONKAN DATA EXCEL! Menampilkan ${sortedData.length} baris jadwal pengawasan penjagaan keamanan dari file "${excelFileName}" sesuai isi dokumen Excel.`
+          : `Data Excel (${sortedData.length} baris dari "${excelFileName}") berhasil ditampilkan di perangkat ini, namun sinkronisasi cloud tertunda karena batas kuota penulisan.`
       );
+      setTimeout(() => setSuccessNotice(''), 8000);
+    } finally {
+      setIsApplyingExcel(false);
     }
-
-    const ws = XLSX.utils.json_to_sheet(templateRows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Roster Security');
-    XLSX.writeFile(wb, 'Template_Jadwal_Security_Oktober_2026.xlsx');
   };
 
-  // Export Current
-  const handleExportRoster = () => {
-    const rows = securityRoster.map((r, idx) => ({
-      'NO': idx + 1,
-      'NAMA PETUGAS': r.name,
-      'HARI / TANGGAL': r.dateStr,
-      'LOKASI / POS': r.location,
-      'JAM HADIR': r.hours
-    }));
-    const ws = XLSX.utils.json_to_sheet(rows);
+  // Download Templates matching exact structure in image (NAMA, HARI / TANGGAL, LOKASI, JAM HADIR with merged date & LIBUR cells)
+  const handleDownloadRosterTemplate = () => {
+    const tMonth = printMonth || 11;
+    const tYear = printYear || 2026;
+    const monthNameUpper = (ID_MONTHS_TITLE[tMonth - 1] || 'NOVEMBER').toUpperCase();
+    const monthNameTitle = ID_MONTHS_TITLE[tMonth - 1] || 'November';
+    const daysInMonth = new Date(tYear, tMonth, 0).getDate();
+
+    const aoa: string[][] = [['NAMA', 'HARI / TANGGAL', 'LOKASI', 'JAM HADIR']];
+    const merges: XLSX.Range[] = [];
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(tYear, tMonth - 1, day);
+      const dayName = ID_DAYS_UPPER[d.getDay()];
+      const dateStr = `${dayName} / ${day} ${monthNameUpper} ${tYear}`;
+      const diffDays = Math.round((Date.UTC(tYear, tMonth - 1, day) - Date.UTC(2026, 9, 1)) / 86400000);
+      const rotIdx = ((diffDays % 6) + 6) % 6;
+      const rot = OCTOBER_DAILY_ROTATION[rotIdx];
+
+      const startRow = aoa.length;
+      aoa.push(
+        [rot.morning[0], dateStr, 'KANWIL DJPB', '06.00 / 18.00'],
+        [rot.morning[1], '',      'KANWIL DJPB', '06.00 / 18.00'],
+        [rot.night[0],   '',      'KANWIL DJPB', '18.00 / 06.00'],
+        [rot.night[1],   '',      'KANWIL DJPB', '18.00 / 06.00'],
+        [rot.rumdin,     '',      'RUMAH DINAS', '18.00 / 06.00'],
+        [rot.libur,      '',      'LIBUR',       '']
+      );
+      // Merge HARI / TANGGAL vertically across the 6 rows for this date
+      merges.push({ s: { r: startRow, c: 1 }, e: { r: startRow + 5, c: 1 } });
+      // Merge LOKASI + JAM HADIR horizontally on the LIBUR row
+      merges.push({ s: { r: startRow + 5, c: 2 }, e: { r: startRow + 5, c: 3 } });
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!merges'] = merges;
+    ws['!cols'] = [{ wch: 18 }, { wch: 28 }, { wch: 18 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Roster Security');
+    XLSX.writeFile(wb, `Template_Jadwal_Security_${monthNameTitle}_${tYear}.xlsx`);
+  };
+
+  // Export Current displayed roster or matrix (with merged HARI / TANGGAL and LIBUR cells matching display & image)
+  const handleExportRoster = () => {
+    const wb = XLSX.utils.book_new();
+
+    if (viewMode === 'matrix') {
+      const matrixFiltered = displayShifts.filter(
+        s =>
+          !searchQuery ||
+          (s.day && s.day.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (s.shiftMorning && s.shiftMorning.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (s.shiftEvening && s.shiftEvening.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (s.shiftNight && s.shiftNight.toLowerCase().includes(searchQuery.toLowerCase()))
+      );
+      const aoa: (string | number)[][] = [
+        ['NO', 'HARI / TANGGAL', 'SHIFT PAGI (06.00/18.00)', 'SHIFT SORE (14.00/22.00)', 'SHIFT MALAM & RUMDIN (18.00/06.00)']
+      ];
+      matrixFiltered.forEach((s, idx) => {
+        aoa.push([idx + 1, s.day, s.shiftMorning || '-', s.shiftEvening || '-', s.shiftNight || '-']);
+      });
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 6 }, { wch: 28 }, { wch: 28 }, { wch: 22 }, { wch: 36 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Matriks Shift Security');
+    } else {
+      const exportSource = filteredRoster;
+      const aoa: (string | number)[][] = [['NO', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR']];
+      const merges: XLSX.Range[] = [];
+
+      let i = 0;
+      while (i < exportSource.length) {
+        const currentDate = (exportSource[i]?.dateStr || '').trim();
+        let groupCount = 1;
+        while (
+          i + groupCount < exportSource.length &&
+          (exportSource[i + groupCount]?.dateStr || '').trim() === currentDate
+        ) {
+          groupCount++;
+        }
+
+        const startExcelRow = aoa.length;
+        for (let k = 0; k < groupCount; k++) {
+          const item = exportSource[i + k];
+          const isLibur = item.location === 'LIBUR';
+          aoa.push([
+            i + k + 1,
+            item.name,
+            k === 0 ? item.dateStr : '',
+            item.location,
+            isLibur ? '' : item.hours
+          ]);
+          if (isLibur) {
+            merges.push({ s: { r: startExcelRow + k, c: 3 }, e: { r: startExcelRow + k, c: 4 } });
+          }
+        }
+        if (groupCount > 1) {
+          merges.push({ s: { r: startExcelRow, c: 2 }, e: { r: startExcelRow + groupCount - 1, c: 2 } });
+        }
+        i += groupCount;
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      if (merges.length > 0) ws['!merges'] = merges;
+      ws['!cols'] = [{ wch: 6 }, { wch: 18 }, { wch: 28 }, { wch: 18 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Roster Security');
+    }
+
     XLSX.writeFile(wb, `${docTitle.replace(/\s+/g, '_')}.xlsx`);
   };
 
@@ -2445,10 +3116,10 @@ export default function SecurityGuardSection({
       safeLocalStorageSet('melayu_security_shifts', JSON.stringify(INITIAL_SECURITY_SHIFTS));
       saveFirestoreCollection('security_shifts', INITIAL_SECURITY_SHIFTS);
     }
-    setDocTitle('JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN OKTOBER 2026');
+    setDocTitle('JADWAL PENGAWASAN PENJAGAAN KEAMANAN BULAN NOVEMBER 2026');
     setDynamicHeaders(['NO.', 'NAMA PETUGAS', 'HARI / TANGGAL', 'LOKASI / POS', 'JAM HADIR']);
     setSelectedIds([]);
-    setSuccessNotice('Jadwal berhasil dikembalikan ke pengaturan default.');
+    setSuccessNotice('Jadwal berhasil dikembalikan ke pengaturan default Bulan November 2026.');
     setTimeout(() => setSuccessNotice(''), 5000);
   };
 
@@ -2559,12 +3230,12 @@ export default function SecurityGuardSection({
             {isAdmin && (
               <>
                 <button
-                  onClick={handleAlignOctoberShifts}
+                  onClick={handleLoadNovember2026Roster}
                   className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center space-x-1.5 transition-all shadow-xs cursor-pointer"
-                  title="Perbaiki Jam Hadir / Shift Mulai Kamis/ 1 Oktober s.d. Sabtu/ 31 Oktober 2026 agar polanya konsisten dan akurat (2 Petugas Pagi 06.00/18.00, 2 Petugas Malam 18.00/06.00, 1 Petugas Rumdin, 1 Petugas Libur)"
+                  title="Muat & Sinkronkan Jadwal Penjagaan Security Bulan November 2026 (1–30 November 2026) sesuai susunan resmi"
                 >
                   <Users className="w-3.5 h-3.5" />
-                  <span>Sinkron Pola Shift (1-31 Okt)</span>
+                  <span>Sinkron Jadwal Nov 2026</span>
                 </button>
 
                 <button
@@ -2680,8 +3351,9 @@ export default function SecurityGuardSection({
                   onChange={(e) => setSelectedLocation(e.target.value)}
                 >
                   <option value="ALL">Semua Lokasi / Pos</option>
-                  <option value="KANWIL DJPB">KANWIL DJPB</option>
-                  <option value="RUMAH DINAS">RUMAH DINAS</option>
+                  {uniqueLocations.map((loc, idx) => (
+                    <option key={idx} value={loc}>{loc}</option>
+                  ))}
                 </select>
 
                 <select
@@ -2750,7 +3422,7 @@ export default function SecurityGuardSection({
               </thead>
               <tbody className="divide-y divide-slate-200 text-slate-800 font-mono">
                 {displayShifts
-                  .filter(s => !searchQuery || (s.day && s.day.toLowerCase().includes(searchQuery.toLowerCase())) || (s.shiftMorning && s.shiftMorning.toLowerCase().includes(searchQuery.toLowerCase())) || (s.shiftNight && s.shiftNight.toLowerCase().includes(searchQuery.toLowerCase())))
+                  .filter(s => !searchQuery || (s.day && s.day.toLowerCase().includes(searchQuery.toLowerCase())) || (s.shiftMorning && s.shiftMorning.toLowerCase().includes(searchQuery.toLowerCase())) || (s.shiftEvening && s.shiftEvening.toLowerCase().includes(searchQuery.toLowerCase())) || (s.shiftNight && s.shiftNight.toLowerCase().includes(searchQuery.toLowerCase())))
                   .map((shift, idx) => (
                     <tr key={idx} className="hover:bg-slate-50 transition-colors">
                       <td className="py-3 px-3 text-center font-bold text-slate-500 font-mono border-r border-slate-200">
@@ -2885,48 +3557,54 @@ export default function SecurityGuardSection({
                         </td>
                       ) : null}
 
-                      {/* LOKASI CELL */}
-                      <td className="py-3 px-4 border-r border-slate-200 font-sans font-bold">
-                        {item.location === 'KANWIL DJPB' && (
-                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-blue-100 text-blue-900 border border-blue-200 text-[11px]">
-                            <Shield className="w-3 h-3 text-blue-600" />
-                            <span>KANWIL DJPB</span>
-                          </span>
-                        )}
-                        {item.location === 'RUMAH DINAS' && (
-                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-teal-100 text-teal-900 border border-teal-200 text-[11px]">
-                            <Home className="w-3 h-3 text-teal-600" />
-                            <span>RUMAH DINAS</span>
-                          </span>
-                        )}
-                        {item.location === 'LIBUR' && (
-                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-rose-100 text-rose-700 border border-rose-300 text-[11px] font-bold">
+                      {/* LOKASI & JAM HADIR CELL (LIBUR merged horizontally matching image.png) */}
+                      {item.location === 'LIBUR' ? (
+                        <td colSpan={2} className="py-3 px-4 border-r border-slate-200 font-sans font-bold text-center bg-rose-50/60">
+                          <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-md bg-rose-100 text-rose-700 border border-rose-300 text-[11px] font-bold">
                             <span>LIBUR</span>
                           </span>
-                        )}
-                        {!['KANWIL DJPB', 'RUMAH DINAS', 'LIBUR'].includes(item.location) && (
-                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-bold">
-                            <span>{item.location}</span>
-                          </span>
-                        )}
-                      </td>
+                        </td>
+                      ) : (
+                        <>
+                          <td className="py-3 px-4 border-r border-slate-200 font-sans font-bold">
+                            {item.location === 'KANWIL DJPB' && (
+                              <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-blue-100 text-blue-900 border border-blue-200 text-[11px]">
+                                <Shield className="w-3 h-3 text-blue-600" />
+                                <span>KANWIL DJPB</span>
+                              </span>
+                            )}
+                            {item.location === 'RUMAH DINAS' && (
+                              <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-teal-100 text-teal-900 border border-teal-200 text-[11px]">
+                                <Home className="w-3 h-3 text-teal-600" />
+                                <span>RUMAH DINAS</span>
+                              </span>
+                            )}
+                            {!['KANWIL DJPB', 'RUMAH DINAS', 'LIBUR'].includes(item.location) && (
+                              <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-indigo-100 text-indigo-900 border border-indigo-200 text-[11px] font-bold">
+                                <span>{item.location}</span>
+                              </span>
+                            )}
+                          </td>
 
-                      {/* JAM HADIR CELL */}
-                      <td className="py-3 px-4 border-r border-slate-200 font-mono font-bold text-slate-800">
-                        {item.location === 'LIBUR' || item.hours === '-' ? (
-                          <span className="text-slate-400 font-bold">-</span>
-                        ) : item.hours === '06.00/18.00' ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200 text-xs font-bold">
-                            06.00/18.00
-                          </span>
-                        ) : item.hours === '18.00/06.00' ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 text-indigo-900 border border-indigo-200 text-xs font-bold">
-                            18.00/06.00
-                          </span>
-                        ) : (
-                          <span>{item.hours}</span>
-                        )}
-                      </td>
+                          <td className="py-3 px-4 border-r border-slate-200 font-mono font-bold text-slate-800">
+                            {item.hours === '-' || !item.hours ? (
+                              <span className="text-slate-400 font-bold">-</span>
+                            ) : isMorningHours(item.hours, item.location) ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200 text-xs font-bold">
+                                {item.hours}
+                              </span>
+                            ) : isNightHours(item.hours, item.location) ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 text-indigo-900 border border-indigo-200 text-xs font-bold">
+                                {item.hours}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 text-xs font-bold">
+                                {item.hours}
+                              </span>
+                            )}
+                          </td>
+                        </>
+                      )}
 
                       {/* ADMIN ACTIONS */}
                       {isAdmin && (
@@ -3045,7 +3723,7 @@ export default function SecurityGuardSection({
                       const m = parseInt(e.target.value, 10);
                       setPreviewMonth(m);
                       if (uploadedWorkbook && selectedSheet) {
-                        parseWorkbookSheet(uploadedWorkbook, selectedSheet, m, previewYear, excelFileName);
+                        parseWorkbookSheet(uploadedWorkbook, selectedSheet, m, previewYear, excelFileName, true);
                       }
                     }}
                     className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-1 focus:ring-djpb-blue"
@@ -3069,18 +3747,56 @@ export default function SecurityGuardSection({
                 />
               </div>
 
-              {/* Data Verification Badges */}
+              {/* Data Verification Badges & Format Info */}
               <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-200/60 text-[11px]">
                 <span className="px-2 py-0.5 bg-blue-100 text-blue-900 font-bold rounded-md border border-blue-200">
-                  Total: {previewRosterData.length} baris tugas aktif
+                  Total: {previewRosterData.length} baris dari Excel
                 </span>
-                <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 font-bold rounded-md border border-emerald-200">
-                  Bebas Duplikasi Petugas
+                <span className="px-2 py-0.5 bg-slate-200/80 text-slate-800 font-bold rounded-md border border-slate-300">
+                  Sheet: {selectedSheet || '-'}
                 </span>
-                <span className="px-2 py-0.5 bg-amber-100 text-amber-900 font-bold rounded-md border border-amber-200">
-                  Petugas Libur (OFF) Tidak Dimasukan
+                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-900 font-bold rounded-md border border-indigo-200">
+                  Format: {previewFormatLabel}
                 </span>
               </div>
+
+              {/* Optional Column Mapping Adjustment for Tabular Excel */}
+              {previewTabularMap && previewColOptions.length > 0 && (
+                <div className="pt-2 border-t border-slate-200/60 space-y-1.5">
+                  <div className="text-[11px] font-bold text-slate-700">
+                    Pemetaan Kolom Excel (Sesuaikan jika kolom Excel berbeda):
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { key: 'name' as const, label: 'Kolom Nama' },
+                      { key: 'date' as const, label: 'Kolom Hari/Tanggal' },
+                      { key: 'loc' as const, label: 'Kolom Lokasi' },
+                      { key: 'hours' as const, label: 'Kolom Jam Hadir' },
+                    ].map(({ key, label }) => (
+                      <div key={key}>
+                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">{label}</label>
+                        <select
+                          value={previewTabularMap[key]}
+                          onChange={(e) => {
+                            const nextVal = parseInt(e.target.value, 10);
+                            const nextMap = { ...previewTabularMap, [key]: nextVal };
+                            setPreviewTabularMap(nextMap);
+                            if (uploadedWorkbook && selectedSheet) {
+                              parseWorkbookSheet(uploadedWorkbook, selectedSheet, previewMonth, previewYear, excelFileName, true, nextMap);
+                            }
+                          }}
+                          className="w-full px-2 py-1 bg-white border border-slate-200 rounded-md text-[11px] font-semibold text-slate-800 outline-none focus:ring-1 focus:ring-djpb-blue"
+                        >
+                          <option value={-1}>(Otomatis / Tidak Ada)</option>
+                          {previewColOptions.map(opt => (
+                            <option key={opt.idx} value={opt.idx}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="overflow-y-auto max-h-60 border border-slate-200 rounded-xl">
@@ -3111,20 +3827,24 @@ export default function SecurityGuardSection({
                             {row.dateStr}
                           </td>
                         ) : null}
-                        <td className="py-2 px-3 border-r border-slate-200 font-sans">
-                          {row.location === 'LIBUR' ? (
-                            <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-700 text-[11px] font-bold border border-rose-300">LIBUR</span>
-                          ) : (
-                            row.location
-                          )}
-                        </td>
-                        <td className="py-2 px-3 font-mono font-bold">
-                          {row.location === 'LIBUR' || row.hours === '-' ? (
-                            <span className="text-slate-400">-</span>
-                          ) : (
-                            row.hours
-                          )}
-                        </td>
+                        {row.location === 'LIBUR' ? (
+                          <td colSpan={2} className="py-2 px-3 font-sans text-center bg-rose-50/60">
+                            <span className="px-2.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[11px] font-bold border border-rose-300">LIBUR</span>
+                          </td>
+                        ) : (
+                          <>
+                            <td className="py-2 px-3 border-r border-slate-200 font-sans">
+                              {row.location}
+                            </td>
+                            <td className="py-2 px-3 font-mono font-bold">
+                              {row.hours === '-' || !row.hours ? (
+                                <span className="text-slate-400">-</span>
+                              ) : (
+                                row.hours
+                              )}
+                            </td>
+                          </>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -3163,11 +3883,12 @@ export default function SecurityGuardSection({
               </button>
               <button
                 type="button"
+                disabled={isApplyingExcel}
                 onClick={handleApplyExcel}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center space-x-1.5 shadow-xs"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-400 text-white text-xs font-bold rounded-xl cursor-pointer flex items-center space-x-1.5 shadow-xs"
               >
                 <Check className="w-4 h-4" />
-                <span>Terapkan Jadwal Baru</span>
+                <span>{isApplyingExcel ? 'Menyimpan...' : 'Terapkan Jadwal Baru'}</span>
               </button>
             </div>
           </div>
@@ -3446,25 +4167,25 @@ export default function SecurityGuardSection({
                 </span>
               </button>
 
-              {/* Option: Sinkronkan Pola Shift & Jam Hadir (Pola 1 Oktober) */}
+              {/* Option: Sinkronkan Jadwal Bulan November 2026 Resmi */}
               <button
                 onClick={() => {
                   setShowDeleteModal(false);
-                  handleAlignOctoberShifts();
+                  handleLoadNovember2026Roster();
                 }}
                 className="w-full p-3.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-left transition-all cursor-pointer group flex items-center justify-between"
               >
                 <div>
                   <div className="font-extrabold text-xs text-blue-900 flex items-center space-x-1.5">
                     <Users className="w-4 h-4 text-blue-600" />
-                    <span>SINKRONKAN POLA SHIFT & JAM HADIR (POLA 1 OKTOBER 2026)</span>
+                    <span>SINKRONKAN JADWAL BULAN NOVEMBER 2026 (1–30 NOVEMBER 2026)</span>
                   </div>
                   <p className="text-[11px] text-blue-700 mt-0.5 ml-5">
-                    Memperbaiki Jam Hadir / Shift mulai Kamis/ 1 Oktober s.d. Sabtu/ 31 Oktober 2026 agar polanya sama persis dengan standar resmi (2 Pagi 06.00/18.00, 2 Malam 18.00/06.00 di KANWIL DJPB, dan 1 Rumdin 18.00/06.00; personil libur tidak dimasukan).
+                    Memuat jadwal penjagaan security resmi bulan November 2026 (2 Pagi 06.00 / 18.00 di KANWIL DJPB, 2 Malam 18.00 / 06.00 di KANWIL DJPB, 1 Rumdin 18.00 / 06.00, dan 1 Libur per hari).
                   </p>
                 </div>
                 <span className="px-2.5 py-1 bg-blue-600 text-white font-bold text-[10px] rounded-lg shadow-2xs">
-                  Sinkronkan Pola
+                  Muat Nov 2026
                 </span>
               </button>
 
@@ -3953,12 +4674,13 @@ export default function SecurityGuardSection({
                     </thead>
                     <tbody className="divide-y divide-slate-400">
                       {printRosterData.map((item, idx) => {
+                        const isLibur = item.location === 'LIBUR';
                         return (
                           <tr key={idx} className="hover:bg-slate-50">
                             <td className="py-1.5 px-1.5 text-center font-bold text-slate-700 border-r border-slate-400">
                               {idx + 1}
                             </td>
-                            <td className="py-1.5 px-3 font-extrabold text-slate-900 border-r border-slate-400">
+                            <td className={`py-1.5 px-3 font-extrabold border-r border-slate-400 ${isLibur ? 'text-rose-600' : 'text-slate-900'}`}>
                               {item.name}
                             </td>
                             {printRowSpanMap[idx] !== undefined ? (
@@ -3969,18 +4691,26 @@ export default function SecurityGuardSection({
                                 {item.dateStr}
                               </td>
                             ) : null}
-                            <td className="py-1.5 px-3 font-bold border-r border-slate-400">
-                              {item.location === 'KANWIL DJPB' ? (
-                                <span className="text-blue-900 font-bold">KANWIL DJPB</span>
-                              ) : item.location === 'RUMAH DINAS' ? (
-                                <span className="text-teal-800 font-bold">RUMAH DINAS</span>
-                              ) : (
-                                <span className="text-slate-800 font-bold">{item.location}</span>
-                              )}
-                            </td>
-                            <td className="py-1.5 px-2 text-center font-mono font-bold text-slate-800">
-                              {item.hours}
-                            </td>
+                            {isLibur ? (
+                              <td colSpan={2} className="py-1.5 px-3 font-bold text-center bg-rose-50/50">
+                                <span className="text-rose-700 font-bold">LIBUR</span>
+                              </td>
+                            ) : (
+                              <>
+                                <td className="py-1.5 px-3 font-bold border-r border-slate-400">
+                                  {item.location === 'KANWIL DJPB' ? (
+                                    <span className="text-blue-900 font-bold">KANWIL DJPB</span>
+                                  ) : item.location === 'RUMAH DINAS' ? (
+                                    <span className="text-teal-800 font-bold">RUMAH DINAS</span>
+                                  ) : (
+                                    <span className="text-slate-800 font-bold">{item.location}</span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-2 text-center font-mono font-bold text-slate-800">
+                                  {item.hours}
+                                </td>
+                              </>
+                            )}
                           </tr>
                         );
                       })}

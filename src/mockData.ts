@@ -484,7 +484,49 @@ export function generateOctoberSecurityShifts(): SecurityShift[] {
   return shifts;
 }
 
-export const INITIAL_SECURITY_SHIFTS: SecurityShift[] = generateOctoberSecurityShifts();
+export function generateNovemberSecurityShifts(): SecurityShift[] {
+  const shifts: SecurityShift[] = [];
+  for (let day = 1; day <= 30; day++) {
+    const d = new Date(2026, 10, day);
+    const dayOfWeek = ID_DAY_NAMES[d.getDay()];
+    const dateStr = `${dayOfWeek}/ ${day} November 2026`;
+    const pattern = ROTATION_PATTERNS[day % 6];
+    shifts.push({
+      day: dateStr,
+      shiftMorning: `${pattern[0]} / ${pattern[1]}`,
+      shiftEvening: '-',
+      shiftNight: `${pattern[2]} / ${pattern[3]} / ${pattern[4]} (Rumdin)`
+    });
+  }
+  return shifts;
+}
+
+export function generateNovemberSecurityRoster(): SecurityRosterItem[] {
+  const roster: SecurityRosterItem[] = [];
+  let idCounter = 1;
+
+  for (let day = 1; day <= 30; day++) {
+    // 2026-11-01 is Sunday (MINGGU), matching continuous rotation from 31 Oktober 2026
+    const d = new Date(2026, 10, day);
+    const dayOfWeek = ID_DAY_NAMES[d.getDay()];
+    const dateStr = `${dayOfWeek}/ ${day} November 2026`;
+    const pattern = ROTATION_PATTERNS[day % 6];
+    // 6 duty positions per day matching official November 2026 image (5 active + 1 LIBUR)
+    roster.push(
+      { id: `ros-nov-${String(idCounter).padStart(3, '0')}`, orderIndex: idCounter - 1, name: pattern[0], dateStr, location: 'KANWIL DJPB', hours: '06.00 / 18.00' },
+      { id: `ros-nov-${String(idCounter + 1).padStart(3, '0')}`, orderIndex: idCounter, name: pattern[1], dateStr, location: 'KANWIL DJPB', hours: '06.00 / 18.00' },
+      { id: `ros-nov-${String(idCounter + 2).padStart(3, '0')}`, orderIndex: idCounter + 1, name: pattern[2], dateStr, location: 'KANWIL DJPB', hours: '18.00 / 06.00' },
+      { id: `ros-nov-${String(idCounter + 3).padStart(3, '0')}`, orderIndex: idCounter + 2, name: pattern[3], dateStr, location: 'KANWIL DJPB', hours: '18.00 / 06.00' },
+      { id: `ros-nov-${String(idCounter + 4).padStart(3, '0')}`, orderIndex: idCounter + 3, name: pattern[4], dateStr, location: 'RUMAH DINAS', hours: '18.00 / 06.00' },
+      { id: `ros-nov-${String(idCounter + 5).padStart(3, '0')}`, orderIndex: idCounter + 4, name: pattern[5], dateStr, location: 'LIBUR', hours: '-' }
+    );
+    idCounter += 6;
+  }
+
+  return roster;
+}
+
+export const INITIAL_SECURITY_SHIFTS: SecurityShift[] = generateNovemberSecurityShifts();
 
 export function generateOctoberSecurityRoster(): SecurityRosterItem[] {
   const roster: SecurityRosterItem[] = [];
@@ -533,7 +575,7 @@ export function generateAugustSecurityRoster(): SecurityRosterItem[] {
   return roster;
 }
 
-export const INITIAL_SECURITY_ROSTER: SecurityRosterItem[] = generateOctoberSecurityRoster();
+export const INITIAL_SECURITY_ROSTER: SecurityRosterItem[] = generateNovemberSecurityRoster();
 
 export const INITIAL_USERS: UserAccount[] = [
   { id: 'ADM-001', employeeId: 'ADM-001', fullName: 'Administrator Bagian Umum', username: 'admin', password: '123', role: 'Administrator', status: 'Aktif' },

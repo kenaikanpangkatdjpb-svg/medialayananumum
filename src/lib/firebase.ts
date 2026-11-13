@@ -320,6 +320,13 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
             return;
           }
           // If this collection was already seeded in the past, an empty snapshot means the items were deleted!
+          if (isCustomUploaded && isFirestoreWriteBlocked()) {
+            const fallback = getLocalFallback();
+            if (fallback && fallback.length > 0) {
+              onUpdate(fallback);
+              return;
+            }
+          }
           if (localStorage.getItem(seededMarkerKey) === 'true') {
             onUpdate([]);
             return;
@@ -342,10 +349,19 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
           }
         } else if (!snapshot.empty) {
           localStorage.setItem(seededMarkerKey, 'true');
-          const remoteItems: T[] = [];
+          let remoteItems: T[] = [];
+          let foundBundle = false;
+          let remoteBundleUpdatedAt = 0;
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
-            if (data) {
+            if (!data) return;
+            if ((docSnap.id === '__bundle_v1' || data.__isBundle === true) && Array.isArray(data.items)) {
+              foundBundle = true;
+              remoteItems = data.items as T[];
+              if (typeof data.updatedAt === 'number') {
+                remoteBundleUpdatedAt = data.updatedAt;
+              }
+            } else if (!foundBundle) {
               const effectiveId = String(data.id || docSnap.id);
               remoteItems.push({ ...data, id: effectiveId } as T);
             }
@@ -357,8 +373,10 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
             return;
           }
 
-          // If local data was custom uploaded by administrator and Firestore write is blocked
-          if (isCustomUploaded && isFirestoreWriteBlocked()) {
+          // If local data was custom uploaded by administrator and is newer than remote or Firestore write is blocked
+          const localUpdatedAt = Number(localStorage.getItem(`melayu_${collectionName}_updated_at`) || 0);
+          const localIsNewerThanRemote = localUpdatedAt > 0 && (remoteBundleUpdatedAt === 0 || localUpdatedAt > remoteBundleUpdatedAt);
+          if (isCustomUploaded && (isFirestoreWriteBlocked() || localIsNewerThanRemote)) {
             const fallback = getLocalFallback();
             if (fallback && fallback.length > 0) {
               onUpdate(fallback);
@@ -396,8 +414,9 @@ export function subscribeFirestoreCollection<T extends { id?: string | number }>
 // Generic save single item to Firestore
 export async function saveFirestoreDoc<T extends { id?: string | number }>(
   collectionName: string,
-  item: T
-): Promise<void> {
+  item: T,
+  options?: { force?: boolean }
+): Promise<boolean> {
   const docId = item.id ? String(item.id) : `doc_${Date.now()}`;
 
   // 1. Immediately update local storage cache for instant UI feedback
@@ -418,14 +437,43 @@ export async function saveFirestoreDoc<T extends { id?: string | number }>(
     console.warn(`[saveFirestoreDoc] Local cache error for ${collectionName}:`, cacheErr);
   }
 
-  if (isFirestoreQuotaExceeded()) return;
+  if (options?.force) {
+    try {
+      localStorage.removeItem(WRITE_QUOTA_KEY);
+    } catch (e) {}
+  } else if (isFirestoreQuotaExceeded()) {
+    return false;
+  }
+
   try {
     const itemRef = doc(db, collectionName, docId);
     const sanitized = sanitizeForFirestore({ ...item, id: docId });
     await setDoc(itemRef, sanitized, { merge: true });
+    return true;
+  } catch (error) {
+    checkAndSetQuotaError(error);
+    return false;
+  }
+}
+
+// Fetch a single document once from Firestore (returns null on miss/timeout)
+export async function getFirestoreDocOnce<T = Record<string, any>>(
+  collectionName: string,
+  docId: string
+): Promise<T | null> {
+  try {
+    const itemRef = doc(db, collectionName, docId);
+    const snap = await Promise.race([
+      getDoc(itemRef),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000))
+    ]);
+    if (snap && snap.exists()) {
+      return snap.data() as T;
+    }
   } catch (error) {
     checkAndSetQuotaError(error);
   }
+  return null;
 }
 
 // Generic delete doc from Firestore thoroughly
@@ -464,8 +512,9 @@ export async function deleteFirestoreDoc(
 // Generic save entire collection (atomic bulk sync with cleanup of orphaned docs)
 export async function saveFirestoreCollection<T extends { id?: string | number }>(
   collectionName: string,
-  items: T[]
-): Promise<void> {
+  items: T[],
+  options?: { force?: boolean }
+): Promise<boolean> {
   // Update local cache immediately for zero UI delay
   try {
     localStorage.setItem(`melayu_${collectionName}`, JSON.stringify(items));
@@ -478,22 +527,66 @@ export async function saveFirestoreCollection<T extends { id?: string | number }
     }
   } catch (e) {}
 
-  if (isFirestoreWriteBlocked()) return;
+  if (options?.force) {
+    try {
+      localStorage.removeItem(WRITE_QUOTA_KEY);
+    } catch (e) {}
+  } else if (isFirestoreWriteBlocked()) {
+    return false;
+  }
 
   try {
-    // If saving security_roster or shifts, clean up old/stray docs so no previous months leak in
+    const useAtomicBundle = collectionName === 'security_roster' || collectionName === 'security_shifts';
+    if (useAtomicBundle) {
+      const sanitizedItems = sanitizeForFirestore(items);
+      const bundlePayload = {
+        id: '__bundle_v1',
+        __isBundle: true,
+        items: sanitizedItems,
+        updatedAt: Date.now()
+      };
+      const approxBytes = JSON.stringify(bundlePayload).length;
+      if (approxBytes < 850000) {
+        await setDoc(doc(db, collectionName, '__bundle_v1'), bundlePayload);
+        // Clean up any legacy individual documents in the background
+        try {
+          const existingSnap = await getDocs(collection(db, collectionName));
+          const legacyRefs = existingSnap.docs.filter(d => d.id !== '__bundle_v1').map(d => d.ref);
+          let delBatch = writeBatch(db);
+          let delCount = 0;
+          for (const ref of legacyRefs) {
+            delBatch.delete(ref);
+            delCount++;
+            if (delCount >= 450) {
+              await delBatch.commit();
+              delBatch = writeBatch(db);
+              delCount = 0;
+            }
+          }
+          if (delCount > 0) {
+            await delBatch.commit();
+          }
+        } catch (cleanupErr) {
+          // Non-fatal: subscribeFirestoreCollection always prioritizes __bundle_v1
+        }
+        return true;
+      }
+    }
+
+    // Standard per-document sync for other collections or oversized payloads
     const newDocIds = new Set<string>();
     const docMap = new Map<string, any>();
 
-    const maxItems = Math.min(items.length, 350);
+    const maxItems = items.length;
     for (let i = 0; i < maxItems; i++) {
       const it = items[i];
-      const docId = it.id ? String(it.id) : `doc_${i}`;
+      const rawId = it.id ? String(it.id) : `doc_${i}`;
+      const docId = rawId.replace(/[^a-zA-Z0-9_-]/g, '_') || `doc_${i}`;
       newDocIds.add(docId);
       docMap.set(docId, sanitizeForFirestore({ ...it, id: docId }));
     }
 
-    // Attempt to query existing docs to remove orphaned docs (e.g. old September docs)
+    // Attempt to query existing docs to remove orphaned docs
     let obsoleteDocRefs: any[] = [];
     try {
       const existingSnap = await getDocs(collection(db, collectionName));
@@ -507,9 +600,9 @@ export async function saveFirestoreCollection<T extends { id?: string | number }
     let batch = writeBatch(db);
     let opCount = 0;
 
-    // Delete obsolete docs first (purging previous month or orphan entries)
-    for (const ref of obsoleteDocRefs) {
-      batch.delete(ref);
+    // Set new docs first so live snapshots are never momentarily empty
+    for (const [docId, data] of docMap.entries()) {
+      batch.set(doc(db, collectionName, docId), data);
       opCount++;
       if (opCount >= 450) {
         await batch.commit();
@@ -518,9 +611,9 @@ export async function saveFirestoreCollection<T extends { id?: string | number }
       }
     }
 
-    // Set new docs
-    for (const [docId, data] of docMap.entries()) {
-      batch.set(doc(db, collectionName, docId), data);
+    // Delete obsolete docs (purging previous/orphan entries)
+    for (const ref of obsoleteDocRefs) {
+      batch.delete(ref);
       opCount++;
       if (opCount >= 450) {
         await batch.commit();
@@ -532,8 +625,10 @@ export async function saveFirestoreCollection<T extends { id?: string | number }
     if (opCount > 0) {
       await batch.commit();
     }
+    return true;
   } catch (error) {
     checkAndSetQuotaError(error);
+    return false;
   }
 }
 
