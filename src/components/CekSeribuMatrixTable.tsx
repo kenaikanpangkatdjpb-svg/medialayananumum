@@ -828,13 +828,9 @@ export const CekSeribuMatrixTable: React.FC<Props> = ({
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [selectedPrintDates, setSelectedPrintDates] = useState<string[]>([]);
   const [printEmployeeFilter, setPrintEmployeeFilter] = useState<'ALL' | 'ANOMALI' | 'TIDAK_HADIR'>('ALL');
-  const [printSignCity, setPrintSignCity] = useState('Pekanbaru');
   const [printSignDate, setPrintSignDate] = useState(() =>
     new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
   );
-  const [printSignRole, setPrintSignRole] = useState('Kepala Subbagian Kepegawaian');
-  const [printSignName, setPrintSignName] = useState('Asep Rudi');
-  const [printSignNip, setPrintSignNip] = useState('19830717 200312 1 001');
   const [showSignSettings, setShowSignSettings] = useState(false);
   const pdfIframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -2136,7 +2132,7 @@ export const CekSeribuMatrixTable: React.FC<Props> = ({
                       ? 'bg-sky-500/20 text-sky-300 border-sky-400/50'
                       : 'bg-slate-900/60 text-slate-300 border-slate-700 hover:text-white'
                   }`}
-                  title="Atur data penandatangan, tanggal cetak, dan filter tanggal"
+                  title="Atur tanggal cetak dan filter tanggal"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   <span>Pengaturan Lembar</span>
@@ -2213,7 +2209,7 @@ export const CekSeribuMatrixTable: React.FC<Props> = ({
                 <div className="flex items-center justify-between">
                   <div className="font-bold text-sky-400 flex items-center space-x-1.5">
                     <SlidersHorizontal className="w-3.5 h-3.5" />
-                    <span>Pengaturan Dokumen & Pejabat Penandatangan</span>
+                    <span>Pengaturan Dokumen & Filter Tanggal</span>
                   </div>
                   <button
                     type="button"
@@ -2224,16 +2220,7 @@ export const CekSeribuMatrixTable: React.FC<Props> = ({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
-                  <div>
-                    <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Kota Penetapan</label>
-                    <input
-                      type="text"
-                      value={printSignCity}
-                      onChange={(e) => setPrintSignCity(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:border-sky-400 focus:outline-none"
-                    />
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Tanggal Dokumen</label>
                     <input
@@ -2241,33 +2228,6 @@ export const CekSeribuMatrixTable: React.FC<Props> = ({
                       value={printSignDate}
                       onChange={(e) => setPrintSignDate(e.target.value)}
                       className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:border-sky-400 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Jabatan Penandatangan</label>
-                    <input
-                      type="text"
-                      value={printSignRole}
-                      onChange={(e) => setPrintSignRole(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:border-sky-400 focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Nama Pejabat</label>
-                    <input
-                      type="text"
-                      value={printSignName}
-                      onChange={(e) => setPrintSignName(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:border-sky-400 focus:outline-none font-medium"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">NIP Pejabat</label>
-                    <input
-                      type="text"
-                      value={printSignNip}
-                      onChange={(e) => setPrintSignNip(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:border-sky-400 focus:outline-none font-mono"
                     />
                   </div>
                 </div>
@@ -2548,22 +2508,13 @@ export const CekSeribuMatrixTable: React.FC<Props> = ({
                   </table>
                 </div>
 
-                {/* Signature Footer */}
-                <div className="mt-8 pt-4 flex justify-between items-end break-inside-avoid text-xs">
+                {/* Document Footer */}
+                <div className="mt-8 pt-4 break-inside-avoid text-xs">
                   <div className="text-[10px] text-slate-500 space-y-1">
                     <p className="font-semibold text-slate-700">Catatan Monitoring:</p>
                     <p>• Data presensi Cek Seribu ditarik dari hasil rekapitulasi harian finger / mobile presensi Kanwil DJPb Riau.</p>
                     <p>• Laporan ini diterbitkan secara otomatis dan sah sebagai bahan evaluasi kedisiplinan pegawai.</p>
                     <p className="text-[9px] text-slate-400 italic">ID Dokumen: CS-{detectedMonthYear.replace(/\s+/g, '-')}-{new Date().getTime()}</p>
-                  </div>
-                  <div className="text-center min-w-[240px]">
-                    <div className="text-slate-800">{printSignCity}, {printSignDate}</div>
-                    <div className="font-semibold text-slate-800 mt-0.5">{printSignRole}</div>
-                    <div className="h-16 flex items-center justify-center">
-                      {/* Space for signature */}
-                    </div>
-                    <div className="font-bold underline text-slate-900">{printSignName}</div>
-                    <div className="text-slate-600 font-mono text-[11px]">NIP {printSignNip}</div>
                   </div>
                 </div>
               </div>
